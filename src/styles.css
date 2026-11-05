@@ -1,0 +1,25 @@
+:root{--bg:#f6f5f2;--panel:#fff;--fg:#1d2227;--muted:#66707a;--line:#e1ded7;--ok:#1f7a4d;--warn:#a86a00;--bad:#b3261e;--accent:#2b5c8a;--grid:#e9e6df}
+@media (prefers-color-scheme:dark){:root{--bg:#14181c;--panel:#1c2126;--fg:#e8eaec;--muted:#98a2ad;--line:#2c333a;--ok:#4cc38a;--warn:#e0a53a;--bad:#f07a72;--accent:#6aa6dd;--grid:#262c32}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,"Segoe UI",Tahoma,Arial,sans-serif;line-height:1.6}
+.wrap{max-width:1100px;margin:0 auto;padding:16px max(16px,env(safe-area-inset-right)) 48px max(16px,env(safe-area-inset-left))}
+h1{font-size:1.6rem;margin:8px 0 2px}h2{font-size:1rem;margin:0 0 4px}
+.muted{color:var(--muted);font-size:.85rem}
+.bar{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:12px 0}
+select,button{font:inherit;padding:6px 10px;border:1px solid var(--line);border-radius:6px;background:var(--panel);color:var(--fg)}
+.tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(10.5rem,1fr));gap:12px;margin:12px 0}
+.tile,.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:14px;min-width:0}
+.tile b{display:block;font-size:1.8rem;font-variant-numeric:tabular-nums}
+.delta{font-size:.8rem;font-variant-numeric:tabular-nums}
+.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}
+.card{margin:12px 0}
+.scroll{overflow:auto}
+table{border-collapse:collapse;width:100%;font-size:.85rem;font-variant-numeric:tabular-nums}
+th,td{padding:6px 8px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
+th{color:var(--muted);font-weight:600;cursor:pointer;user-select:none}
+.row{display:grid;grid-template-columns:7rem 1fr 4rem 4.5rem;gap:8px;align-items:center;padding:3px 0;font-size:.85rem}
+.row svg{width:100%;height:30px;display:block}
+.num{direction:ltr;text-align:right;font-variant-numeric:tabular-nums}
+.stack{display:flex;height:14px;border-radius:3px;overflow:hidden;background:var(--grid)}
+.empty{padding:32px 0}.empty pre{background:var(--panel);border:1px solid var(--line);padding:12px;border-radius:6px;overflow:auto;direction:ltr;text-align:left}
+@media (max-width:520px){.row{grid-template-columns:5.5rem 1fr 3.4rem 3.6rem}}
