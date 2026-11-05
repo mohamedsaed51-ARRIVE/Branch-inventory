@@ -23,3 +23,18 @@ th{color:var(--muted);font-weight:600;cursor:pointer;user-select:none}
 .stack{display:flex;height:14px;border-radius:3px;overflow:hidden;background:var(--grid)}
 .empty{padding:32px 0}.empty pre{background:var(--panel);border:1px solid var(--line);padding:12px;border-radius:6px;overflow:auto;direction:ltr;text-align:left}
 @media (max-width:520px){.row{grid-template-columns:5.5rem 1fr 3.4rem 3.6rem}}
+.lead{font-size:1.05rem;margin:8px 0}
+.cardhead{display:flex;flex-wrap:wrap;gap:8px 16px;justify-content:space-between;align-items:flex-start}
+.cardhead .bar{margin:0}
+.item{border:1px solid var(--line);border-inline-start:4px solid var(--line);border-radius:6px;padding:10px 12px;margin:8px 0}
+.item.bad{border-inline-start-color:var(--bad)}.item.warn{border-inline-start-color:var(--warn)}
+.ihead{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.rank{display:inline-grid;place-items:center;width:1.5rem;height:1.5rem;border-radius:50%;background:var(--grid);font-size:.8rem;font-variant-numeric:tabular-nums}
+.pill{font-size:.75rem;padding:1px 8px;border-radius:99px;border:1px solid currentColor}
+.pill.bad{color:var(--bad)}.pill.warn{color:var(--warn)}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 2px}
+.chip{font-size:.8rem;padding:2px 8px;border-radius:4px;background:var(--grid)}
+.chip.bad{color:var(--bad)}.chip.warn{color:var(--warn)}
+.checks{margin:6px 0 0;padding-inline-start:1.2rem}.checks li{margin:4px 0}
+footer.card input{width:4rem}
+.tile .delta{display:block;margin-top:2px}.tile .muted{display:block}

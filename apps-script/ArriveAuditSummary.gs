@@ -8,7 +8,8 @@ const CFG = {
   SUMMARY: 'تجميع_الجرد',
   LOG: 'سجل_التجميع',
   RECENT_DAYS: 7,      // الأوراق الأحدث من كده تُعاد قراءتها في كل تحديث، والأقدم تُؤخذ من التجميع السابق
-  EVERY_HOURS: 1       // التحديث التلقائي كل كام ساعة
+  EVERY_HOURS: 1,      // التحديث التلقائي كل كام ساعة
+  AGED_DAYS: 7         // افتراض للعرض: الأوردر الأقدم من كده (من تاريخ استلام البيك أب حتى تاريخ ورقة الجرد) يُحسب متأخرًا. يحتاج اعتماد SOP
 };
 
 function onOpen() {
@@ -72,6 +73,8 @@ function findCols_(hdr) {
     branch: branch,
     cod: find(x => x.indexOf('مبلغ') !== -1),
     reply: find(x => x.indexOf('رد') === 0),
+    pickup: find(x => x.indexOf('استلام') !== -1),
+    status: find(x => x.indexOf('حال') === 0),
     comment: find(x => x.indexOf('تعليق') !== -1 || x.indexOf('تعيق') !== -1 || x.indexOf('الاوديت') !== -1)
   };
 }
@@ -80,8 +83,14 @@ function branchName_(v) {
   return normAr_(v).replace(/^فرع\s*/, '');
 }
 
+function parseDay_(v) {
+  if (v instanceof Date) return new Date(v.getFullYear(), v.getMonth(), v.getDate());
+  const m = String(v == null ? '' : v).match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  return m ? new Date(+m[1], +m[2] - 1, +m[3]) : null;
+}
+
 // يعالج مصفوفة قيم ورقة واحدة (الصف الأول عناوين). مفصولة للاختبار.
-function summarizeSheet_(vals) {
+function summarizeSheet_(vals, dt) {
   const idx = findCols_(vals[0]);
   if (idx.branch < 0 || idx.comment < 0) return { error: 'لم أجد عمود الفرع أو التعليق', idx: idx };
   const by = {}, seen = {};
@@ -93,7 +102,7 @@ function summarizeSheet_(vals) {
     if (!awb || !br) continue;
     if (seen[awb]) { dup++; continue; }
     seen[awb] = 1;
-    const o = by[br] || (by[br] = { total: 0, upd: 0, not: 0, other: 0, codNot: 0, noReply: 0 });
+    const o = by[br] || (by[br] = { total: 0, upd: 0, not: 0, other: 0, codNot: 0, noReply: 0, returns: 0, aged: 0, noPickup: 0 });
     const k = classify_(row[idx.comment]);
     o.total++; o[k]++;
     if (k === 'not' && idx.cod >= 0) {
@@ -101,6 +110,10 @@ function summarizeSheet_(vals) {
       if (cod > 0) o.codNot += cod;
     }
     if (idx.reply >= 0 && !String(row[idx.reply]).trim()) o.noReply++;
+    if (idx.status >= 0 && normAr_(row[idx.status]).indexOf('مرتجعات') !== -1) o.returns++;
+    const pk = idx.pickup >= 0 ? parseDay_(row[idx.pickup]) : null;
+    if (!pk) o.noPickup++;
+    else if (dt && Math.round((dt.getTime() - pk.getTime()) / 864e5) >= CFG.AGED_DAYS) o.aged++;
   }
   return { by: by, dup: dup, idx: idx };
 }
@@ -121,9 +134,9 @@ function run_(full) {
   // صفوف التجميع السابق مجمعة باسم الورقة المصدر
   const prev = {};
   const old = ss.getSheetByName(CFG.SUMMARY);
-  if (!full && old && old.getLastRow() > 1) {
-    old.getRange(2, 1, old.getLastRow() - 1, 10).getValues().forEach(r => {
-      const k = String(r[9]).trim();
+  if (!full && old && old.getLastRow() > 1 && old.getLastColumn() >= 13) {  // تجميع قديم بأعمدة أقل يُعاد بناؤه
+    old.getRange(2, 1, old.getLastRow() - 1, 13).getValues().forEach(r => {
+      const k = String(r[12]).trim();
       (prev[k] = prev[k] || []).push(r);
     });
   }
@@ -146,7 +159,7 @@ function run_(full) {
     const lastRow = sh.getLastRow(), lastCol = sh.getLastColumn();
     if (lastRow < 2) { log.push([name, 'فارغة', hidden.replace(' | ', '')]); return; }
     const vals = sh.getRange(1, 1, lastRow, Math.min(lastCol, 40)).getValues();
-    const res = summarizeSheet_(vals);
+    const res = summarizeSheet_(vals, dt);
     if (res.error) { log.push([name, 'خطأ', hidden + res.error]); return; }
     const notes = [];
     if (res.dup) notes.push('شحنات مكررة تم تجاهلها: ' + res.dup);
@@ -156,17 +169,19 @@ function run_(full) {
       tot += o.total; oth += o.other;
       out.push([dt, br, o.total, o.upd, o.not, o.other,
         o.total ? Math.round(o.upd / o.total * 1000) / 10 : 0,
-        o.codNot, o.noReply, key]);
+        o.codNot, o.noReply, o.returns, o.aged, o.noPickup, key]);
     });
     if (tot && oth === tot) notes.push('كل الشحنات بلا نتيجة جرد (لم يبدأ الجرد أو عمود التعليق فارغ)');
     if (res.idx.reply < 0) notes.push('عمود رد الفرع غير موجود');
+    if (res.idx.pickup < 0) notes.push('عمود تاريخ الاستلام غير موجود (العمر غير محسوب)');
+    if (res.idx.status < 0) notes.push('عمود حالة الشحنة غير موجود');
     log.push([name, 'تمت', hidden + 'شحنات: ' + tot + (notes.length ? ' | ' + notes.join(' | ') : '')]);
   });
 
   out.sort((a, b) => a[0] - b[0] || String(a[1]).localeCompare(String(b[1]), 'ar'));
 
   const head = ['التاريخ', 'الفرع', 'الشحنات', 'تم التحديث', 'لم يتم التحديث', 'غير محدد',
-    'نسبة التحديث %', 'تحصيل غير محدّث', 'بدون رد', 'الورقة المصدر'];
+    'نسبة التحديث %', 'تحصيل غير محدّث', 'بدون رد', 'مرتجعات', 'متأخرة (عمر الأوردر)', 'بدون تاريخ استلام', 'الورقة المصدر'];
   const sum = ss.getSheetByName(CFG.SUMMARY) || ss.insertSheet(CFG.SUMMARY);
   sum.clear();
   sum.getRange(1, 1, 1, head.length).setValues([head]).setFontWeight('bold');
