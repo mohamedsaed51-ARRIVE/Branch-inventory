@@ -38,3 +38,13 @@ th{color:var(--muted);font-weight:600;cursor:pointer;user-select:none}
 .checks{margin:6px 0 0;padding-inline-start:1.2rem}.checks li{margin:4px 0}
 footer.card input{width:4rem}
 .tile .delta{display:block;margin-top:2px}.tile .muted{display:block}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,22rem),1fr));gap:12px}
+.brow{display:grid;grid-template-columns:7rem 1fr 6rem;gap:8px;align-items:center;padding:3px 0;font-size:.85rem}
+.brow.w2{grid-template-columns:11rem 1fr 3.5rem}
+.lab{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.track{display:flex;height:14px;border-radius:3px;overflow:hidden;background:var(--grid)}
+.seg{height:100%}
+.legend{display:flex;flex-wrap:wrap;gap:12px;font-size:.8rem;color:var(--muted);margin:4px 0 8px}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-inline-end:4px}
+.tile b{font-family:Georgia,"Times New Roman",serif;font-weight:400}
+@media (max-width:520px){.brow.w2{grid-template-columns:7rem 1fr 3rem}}

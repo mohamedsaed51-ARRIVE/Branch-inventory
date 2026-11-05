@@ -53,6 +53,16 @@ function Spark({ pts, n, good, bad }) {
   );
 }
 
+function Bar({ label, segs, total, val, wide }) {
+  return (
+    <div className={'brow' + (wide ? ' w2' : '')}>
+      <span className="lab" title={label}>{label}</span>
+      <div className="track">{segs.filter((x) => x.v > 0).map((x, i) => <div key={i} className="seg" style={{ width: (total ? (x.v / total) * 100 : 0) + '%', background: x.c }} />)}</div>
+      <span className="num muted">{val}</span>
+    </div>
+  );
+}
+
 export default function App() {
   const { status, rows, msg, generated } = useData();
   const [date, setDate] = useState('');
@@ -150,6 +160,7 @@ export default function App() {
     .sort((a, b) => (N(a[sort.k]) > N(b[sort.k]) || (sort.k === 'branch' && a.branch > b.branch) ? 1 : -1) * sort.dir);
   const th = (k, label) => <th onClick={() => setSort({ k, dir: sort.k === k ? -sort.dir : 1 })}>{label}{sort.k === k ? (sort.dir > 0 ? ' ▲' : ' ▼') : ''}</th>;
 
+  const compo = [...dayRows].sort((a, b) => N(b.not_upd) - N(a.not_upd));
   const worst = [...dayRows].filter((r) => N(r.total) >= 50).sort((a, b) => a.rate - b.rate).slice(0, 3);
 
   return (
@@ -215,6 +226,13 @@ export default function App() {
             <span className={'num ' + (t.d == null ? 'muted' : t.d > 0 ? 'ok' : t.d < 0 ? 'bad' : 'muted')}>{t.d == null ? '—' : sgn(t.d)}</span>
           </div>
         ))}
+      </section>
+
+      <section className="card">
+        <h2>نتيجة الجرد لكل فرع</h2>
+        <p className="muted">الفروع مرتبة بعدد الشحنات غير المحدّثة. الرقم = غير المحدّثة / الإجمالي.</p>
+        <div className="legend"><span><i style={{ background: 'var(--ok)' }} />تم التحديث</span><span><i style={{ background: 'var(--bad)' }} />لم يتم التحديث</span><span><i style={{ background: 'var(--grid)' }} />غير محدد</span></div>
+        {compo.map((r) => <Bar key={r.branch} label={r.branch} total={N(r.total)} val={`${fi(r.not_upd)} / ${fi(r.total)}`} segs={[{ v: N(r.upd), c: 'var(--ok)' }, { v: N(r.not_upd), c: 'var(--bad)' }, { v: N(r.other), c: 'var(--grid)' }]} />)}
       </section>
 
       <section className="card">
