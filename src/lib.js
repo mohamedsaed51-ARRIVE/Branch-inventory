@@ -57,3 +57,29 @@ export function demoRows() {
   }
   return rows;
 }
+
+// تجميع شهري تجريبي مشتق من البيانات التجريبية اليومية (غير حقيقي)
+export function demoMonthly(rows) {
+  const out = [];
+  const months = [...new Set(rows.map((r) => r.date.slice(0, 7)))].sort();
+  months.forEach((m) => {
+    const mr = rows.filter((r) => r.date.startsWith(m));
+    [...new Set(mr.map((r) => r.branch))].forEach((b) => {
+      const br = mr.filter((r) => r.branch === b);
+      const total = Math.round(Math.max(...br.map((r) => N(r.total))) * 1.8);
+      const avg = br.reduce((a, r) => a + N(r.rate), 0) / br.length;
+      const no_audit = Math.round(total * 0.01);
+      const upd = Math.round(total * avg / 100);
+      const not_upd = Math.max(0, total - upd - no_audit);
+      const noReplyBranch = br.some((r) => N(r.no_reply) > 0);
+      out.push({ month: m, branch: b, total, upd, not_upd, no_audit, no_branch_reply: noReplyBranch ? Math.round(total * 0.9) : Math.round(total * 0.03), conflict: Math.round(not_upd * 0.05), last: br[br.length - 1].date, days: br.length });
+    });
+  });
+  return out;
+}
+export function sumMonthly(rows) {
+  const t = { total: 0, upd: 0, not_upd: 0, no_audit: 0, no_branch_reply: 0, conflict: 0 };
+  rows.forEach((r) => Object.keys(t).forEach((k) => { t[k] += N(r[k]); }));
+  const pc = (v) => (t.total ? (v / t.total) * 100 : 0);
+  return { ...t, rate: pc(t.upd), p_not: pc(t.not_upd), p_no_audit: pc(t.no_audit), p_no_branch: pc(t.no_branch_reply), p_conflict: pc(t.conflict) };
+}

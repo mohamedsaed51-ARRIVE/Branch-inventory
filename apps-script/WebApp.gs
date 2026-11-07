@@ -14,7 +14,12 @@ function doGet(e) {
     branch: r[1], total: r[2], upd: r[3], not_upd: r[4], other: r[5],
     rate: r[6], cod_not: r[7], no_reply: r[8], source: String(r[9])
   }));
-  return json_({ rows: rows, generated: new Date().toISOString() });
+  const ms = SpreadsheetApp.getActive().getSheetByName(CFG.MONTHLY);
+  const monthly = (ms && ms.getLastRow() > 1) ? ms.getRange(2, 1, ms.getLastRow() - 1, 10).getValues().map(r => ({
+    month: String(r[0]).trim(), branch: r[1], total: r[2], upd: r[3], not_upd: r[4], no_audit: r[5],
+    no_branch_reply: r[6], conflict: r[7], last: Utilities.formatDate(new Date(r[8]), tz, 'yyyy-MM-dd'), days: r[9]
+  })) : [];
+  return json_({ rows: rows, monthly: monthly, generated: new Date().toISOString() });
 }
 
 function json_(o) {

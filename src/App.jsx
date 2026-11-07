@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import ChartBox from './ChartBox.jsx';
-import { N, fi, fp, sgn, sum, LEVELS, levelOf, toCsv, download, loadCfg, saveCfg, demoRows } from './lib.js';
+import { N, fi, fp, sgn, sum, sumMonthly, LEVELS, levelOf, toCsv, download, loadCfg, saveCfg, demoRows, demoMonthly } from './lib.js';
 
 const ENV_URL = import.meta.env.VITE_DATA_URL;
 const ENV_TOKEN = import.meta.env.VITE_DATA_TOKEN;
@@ -8,15 +8,15 @@ const DEFAULTS = { url: '', refreshMin: 15, excellent: 90, good: 80, bad: 50 };
 const PAGE = 15;
 
 function useData(url, refreshMin, demo) {
-  const [s, set] = useState({ status: 'idle', rows: [], at: null });
+  const [s, set] = useState({ status: 'idle', rows: [], monthly: [], at: null });
   const run = useCallback(() => {
-    if (demo) { set({ status: 'ok', rows: demoRows(), at: new Date(), generated: 'demo' }); return; }
+    if (demo) { const d = demoRows(); set({ status: 'ok', rows: d, monthly: demoMonthly(d), at: new Date(), generated: 'demo' }); return; }
     if (!url) { set({ status: 'nourl', rows: [], at: null }); return; }
     const u = ENV_TOKEN ? url + (url.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(ENV_TOKEN) : url;
     set((p) => ({ ...p, status: p.rows.length ? 'refreshing' : 'loading' }));
     fetch(u).then((r) => r.json()).then((j) => {
       if (j.error) throw new Error(j.error);
-      set({ status: 'ok', rows: j.rows || [], at: new Date(), generated: j.generated });
+      set({ status: 'ok', rows: j.rows || [], monthly: j.monthly || [], at: new Date(), generated: j.generated });
     }).catch((e) => set((p) => ({ ...p, status: 'error', msg: String(e.message || e) })));
   }, [url, demo]);
   useEffect(() => { run(); }, [run]);
@@ -45,7 +45,7 @@ export default function App() {
   const [demoOn, setDemoOn] = useState(() => new URLSearchParams(location.search).get('demo') === '1');
   const [showSet, setShowSet] = useState(false);
   const url = cfg.url || ENV_URL || '';
-  const { status, rows, at, msg, generated, reload } = useData(url, cfg.refreshMin, demoOn);
+  const { status, rows, monthly, at, msg, generated, reload } = useData(url, cfg.refreshMin, demoOn);
 
   useEffect(() => { document.documentElement.setAttribute('data-theme', theme); saveCfg('bi_theme', theme); }, [theme]);
 
@@ -58,6 +58,7 @@ export default function App() {
   const [page, setPage] = useState(0);
   const [sort, setSort] = useState({ k: 'date', dir: -1 });
   const [cmp, setCmp] = useState({ on: false, a: '', b: '' });
+  const [month, setMonth] = useState('');
   const [copied, setCopied] = useState('');
   const th = { excellent: +cfg.excellent, good: +cfg.good, bad: +cfg.bad };
 
@@ -74,6 +75,15 @@ export default function App() {
   const prevRows = prevDate ? rows.filter((r) => r.date === prevDate && branchOk(r)) : null;
   const T = sum(snapRows), P = prevRows ? sum(prevRows) : null;
   const prevBy = new Map((prevRows || []).map((r) => [r.branch, r]));
+
+  const months = [...new Set(monthly.map((r) => r.month))].sort();
+  const curMonth = months.includes(month) ? month : months[months.length - 1];
+  const monthRows = monthly.filter((r) => r.month === curMonth && branchOk(r));
+  const M = sumMonthly(monthRows);
+  const prevMonth = months[months.indexOf(curMonth) - 1];
+  const MP = prevMonth ? sumMonthly(monthly.filter((r) => r.month === prevMonth && branchOk(r))) : null;
+  const monthLast = monthRows.map((r) => r.last).sort().pop();
+  const monthDays = Math.max(0, ...monthRows.map((r) => N(r.days)));
 
   const reset = () => { setFrom(''); setTo(''); setSel([]); setQ(''); setPage(0); };
   const exportCsv = () => download('branch-inventory.csv', toCsv(inRange, [
@@ -208,6 +218,7 @@ export default function App() {
 
         <div className="filters">
           <div className="fgrid">
+            {months.length > 0 && <div className="fgroup"><label htmlFor="f-month">الشهر (للكروت الشهرية)</label><select id="f-month" value={curMonth} onChange={(e) => setMonth(e.target.value)}>{[...months].reverse().map((m) => <option key={m}>{m}</option>)}</select></div>}
             <div className="fgroup"><label htmlFor="f-from">من تاريخ</label><select id="f-from" value={dFrom} onChange={(e) => { setFrom(e.target.value); setPage(0); }}>{dates.map((d) => <option key={d}>{d}</option>)}</select></div>
             <div className="fgroup"><label htmlFor="f-to">إلى تاريخ</label><select id="f-to" value={dTo} onChange={(e) => { setTo(e.target.value); setPage(0); }}>{[...dates].reverse().map((d) => <option key={d}>{d}</option>)}</select></div>
             <div className="fgroup"><label htmlFor="f-q">بحث بالفرع</label><input id="f-q" value={q} onChange={(e) => { setQ(e.target.value); setPage(0); }} placeholder="اسم الفرع" /></div>
@@ -222,14 +233,34 @@ export default function App() {
         </div>
 
         {!snapRows.length ? <div className="panel"><p>لا توجد بيانات تطابق الفلاتر الحالية.</p></div> : (<>
-        <Heading tag="مؤشرات" title="المؤشرات الرئيسية" sub={`لقطة ${snap}${prevDate ? ' مقارنة بـ ' + prevDate : ''}`} />
+        <Heading tag="الشهر" title={`المؤشرات الشهرية — \u200E${curMonth || '—'}\u200E`} sub={curMonth ? `كل شحنة تُحسب مرة واحدة في الشهر بآخر نتيجة أوديت مسجلة لها. أيام الجرد: ${monthDays}، آخر جرد: ${monthLast}.` : 'لا توجد بيانات شهرية'} />
+        {!monthRows.length ? (
+          <div className="panel"><p><i className="fa-solid fa-triangle-exclamation warn" /> الكروت الشهرية تحتاج ورقة <b>تجميع_شهري</b> من السكريبت المحدّث (apps-script/ArriveAuditSummary.gs و WebApp.gs) ثم «إعادة بناء كاملة». لم أعرض أرقامًا شهرية تقديرية.</p></div>
+        ) : (<>
         <div className="kpi-row">
-          <div className="kpi"><span className="l">إجمالي الشحنات</span><span className="v">{fi(T.total)}</span><Delta cur={T.total} prev={P && P.total} /></div>
-          <div className={'kpi ' + (T.rate >= th.good ? 'accent-ok' : T.rate >= th.bad ? 'accent-warn' : 'accent-bad')}><span className="l">نسبة التحديث</span><span className="v">{fp(T.rate)}</span><Delta cur={T.rate} prev={P && P.rate} pp /></div>
-          <div className="kpi accent-warn"><span className="l">شحنات غير محدّثة</span><span className="v">{fi(T.not_upd)}</span><Delta cur={T.not_upd} prev={P && P.not_upd} lowerBetter /></div>
-          <div className="kpi accent-bad"><span className="l">تحصيل غير محدّث (ج.م)</span><span className="v">{fi(T.cod_not)}</span><Delta cur={T.cod_not} prev={P && P.cod_not} lowerBetter /></div>
-          <div className="kpi accent-teal"><span className="l">شحنات بدون رد فرع</span><span className="v">{fi(T.no_reply)}</span><Delta cur={T.no_reply} prev={P && P.no_reply} lowerBetter /></div>
+          <div className="kpi"><span className="l">شحنات الشهر (فريدة)</span><span className="v">{fi(M.total)}</span><span className="d muted">100% — كل شحنة مرة واحدة</span></div>
+          <div className={'kpi ' + (M.rate >= th.good ? 'accent-ok' : M.rate >= th.bad ? 'accent-warn' : 'accent-bad')}><span className="l">نسبة التحديث <span className="chip s-progress">حسب الأوديت</span></span><span className="v">{fp(M.rate)}</span>
+            <span className="d muted">تم التحديث {fi(M.upd)} من {fi(M.total)}{MP ? ` — الشهر السابق ${fp(MP.rate)}` : ''}</span></div>
+          <div className="kpi accent-warn"><span className="l">غير محدّثة <span className="chip s-progress">حسب الأوديت</span></span><span className="v">{fi(M.not_upd)}</span><span className="d muted">{fp(M.p_not)} من الشحنات</span></div>
+          <div className="kpi accent-bad"><span className="l">بدون رد الفرع <span className="chip s-action">حسب الفرع</span></span><span className="v">{fi(M.no_branch_reply)}</span><span className="d muted">{fp(M.p_no_branch)} من الشحنات (عمود رد الفرع فارغ)</span></div>
+          <div className="kpi accent-teal"><span className="l">بدون رد الأوديت <span className="chip s-progress">حسب الأوديت</span></span><span className="v">{fi(M.no_audit)}</span><span className="d muted">{fp(M.p_no_audit)} من الشحنات (تعليق الأوديت فارغ أو غير مطابق)</span></div>
         </div>
+        <p className="section-sub" style={{ marginTop: 8 }}>
+          <b>الأساس:</b> «حسب الأوديت» = عمود تعليق الأوديت («تم…» = محدّثة، «لم يتم…» = غير محدّثة، الفارغ = بدون رد الأوديت). «حسب الفرع» = عمود رد الفرع (الفارغ = بدون رد). النسب كلها من شحنات الشهر الفريدة. حالة «إغلاق رد الأوديت» لا يوجد لها عمود في الشيت بعد، والبديل المعروض هو «بدون رد الأوديت».
+        </p>
+        <div className="panel tscroll" style={{ marginTop: 8 }}><table>
+          <thead><tr><th>الفرع</th><th>الشحنات</th><th>نسبة التحديث (أوديت)</th><th>غير محدّثة</th><th>بدون رد الفرع</th><th>بدون رد الأوديت</th><th>تعارض</th></tr></thead>
+          <tbody>{[...monthRows].sort((a, b) => (N(a.upd) / (N(a.total) || 1)) - (N(b.upd) / (N(b.total) || 1))).map((r) => {
+            const t = N(r.total) || 1; const rate = N(r.upd) / t * 100;
+            return <tr key={r.branch}><td>{r.branch}</td><td className="n">{fi(r.total)}</td><td className="n"><b>{fp(rate)}</b></td>
+              <td className="n">{fi(r.not_upd)} <small className="muted">({fp(N(r.not_upd) / t * 100)})</small></td>
+              <td className="n">{fi(r.no_branch_reply)} <small className="muted">({fp(N(r.no_branch_reply) / t * 100)})</small></td>
+              <td className="n">{fi(r.no_audit)} <small className="muted">({fp(N(r.no_audit) / t * 100)})</small></td>
+              <td className="n">{fi(r.conflict)}</td></tr>;
+          })}</tbody>
+        </table></div>
+        <p className="section-sub">«تعارض» = رد الفرع «تم التحديث» لكن الأوديت يقول «لم يتم التحديث».</p>
+        </>)}
 
         <Heading tag="أداء" title="صحة الفروع" sub={`ممتاز ≥ ${th.excellent}% — جيد ≥ ${th.good}% — يحتاج انتباه ≥ ${th.bad}% — حرج أقل من ذلك (حدود للعرض وليست سياسة معتمدة)`} />
         <div className="panel tscroll"><table>

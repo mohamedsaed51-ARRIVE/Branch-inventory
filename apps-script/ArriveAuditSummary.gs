@@ -7,6 +7,7 @@
 const CFG = {
   SUMMARY: 'تجميع_الجرد',
   LOG: 'سجل_التجميع',
+  MONTHLY: 'تجميع_شهري',   // شحنات فريدة لكل شهر وفرع (آخر نتيجة أوديت مسجلة لكل شحنة)
   RECENT_DAYS: 7,      // الأوراق الأحدث من كده تُعاد قراءتها في كل تحديث، والأقدم تُؤخذ من التجميع السابق
   EVERY_HOURS: 1       // التحديث التلقائي كل كام ساعة
 };
@@ -84,7 +85,7 @@ function branchName_(v) {
 function summarizeSheet_(vals) {
   const idx = findCols_(vals[0]);
   if (idx.branch < 0 || idx.comment < 0) return { error: 'لم أجد عمود الفرع أو التعليق', idx: idx };
-  const by = {}, seen = {};
+  const by = {}, seen = {}, ships = [];
   let dup = 0;
   for (let r = 1; r < vals.length; r++) {
     const row = vals[r];
@@ -100,9 +101,46 @@ function summarizeSheet_(vals) {
       const cod = Number(row[idx.cod]);
       if (cod > 0) o.codNot += cod;
     }
-    if (idx.reply >= 0 && !String(row[idx.reply]).trim()) o.noReply++;
+    const rep = idx.reply >= 0 ? String(row[idx.reply]).trim() : '';
+    if (idx.reply >= 0 && !rep) o.noReply++;
+    // سجل الشحنة للتجميع الشهري: a=رقم، b=فرع، k=نتيجة الأوديت، nr=بدون رد فرع، cf=رد الفرع «تم التحديث» والأوديت «لم يتم»
+    ships.push({ a: awb, b: br, k: k, nr: (idx.reply >= 0 && !rep) ? 1 : 0, cf: (k === 'not' && normAr_(rep) === 'تم التحديث') ? 1 : 0 });
   }
-  return { by: by, dup: dup, idx: idx };
+  return { by: by, dup: dup, idx: idx, ships: ships };
+}
+
+function monthKey_(d) {
+  return d.getFullYear() + '-' + (d.getMonth() < 9 ? '0' : '') + (d.getMonth() + 1);
+}
+
+// يبني صفوف الشهري من [{dt, ships}]. كل شحنة تُحسب مرة واحدة في الشهر بآخر نتيجة أوديت مسجلة لها.
+// ورقة اليوم التي لم يبدأ جردها (نتيجة غير محددة) لا تمحو نتيجة سابقة مسجلة.
+function buildMonthly_(sheetsData) {
+  sheetsData.sort((a, b) => a.dt - b.dt);
+  const months = {};
+  sheetsData.forEach(sd => {
+    const mk = monthKey_(sd.dt);
+    const m = months[mk] || (months[mk] = { ships: {}, days: 0, last: sd.dt });
+    m.days++; m.last = sd.dt;
+    sd.ships.forEach(s => {
+      const p = m.ships[s.a];
+      if (!p || s.k !== 'other' || p.k === 'other') m.ships[s.a] = s;
+    });
+  });
+  const rows = [];
+  Object.keys(months).sort().forEach(mk => {
+    const m = months[mk], by = {};
+    Object.keys(m.ships).forEach(a => {
+      const s = m.ships[a];
+      const o = by[s.b] || (by[s.b] = { total: 0, upd: 0, not: 0, other: 0, nr: 0, cf: 0 });
+      o.total++; o[s.k]++; o.nr += s.nr; o.cf += s.cf;
+    });
+    Object.keys(by).sort((x, y) => String(x).localeCompare(String(y), 'ar')).forEach(b => {
+      const o = by[b];
+      rows.push([mk, b, o.total, o.upd, o.not, o.other, o.nr, o.cf, m.last, m.days]);
+    });
+  });
+  return rows;
 }
 
 /* ---------- التشغيل ---------- */
@@ -128,16 +166,29 @@ function run_(full) {
     });
   }
 
+  // التجميع الشهري السابق (للأشهر الأقدم من الشهر الماضي نعيد استخدامه ولا نعيد قراءة أوراقها)
+  const monPrev = {};
+  const oldMon = ss.getSheetByName(CFG.MONTHLY);
+  if (!full && oldMon && oldMon.getLastRow() > 1) {
+    oldMon.getRange(2, 1, oldMon.getLastRow() - 1, 10).getValues().forEach(r => {
+      const k = String(r[0]).trim();
+      (monPrev[k] = monPrev[k] || []).push(r);
+    });
+  }
+  const curMonth = monthKey_(today), prevMonth = monthKey_(new Date(today.getFullYear(), today.getMonth() - 1, 1));
+  const hot = mk => full || !oldMon || !monPrev[mk] || mk === curMonth || mk === prevMonth;
+  const monthData = [];
+
   ss.getSheets().forEach(sh => {
     const name = sh.getName();
-    if (name === CFG.SUMMARY || name === CFG.LOG) return;
+    if (name === CFG.SUMMARY || name === CFG.LOG || name === CFG.MONTHLY) return;
     const dt = sheetDate_(name, today);
     if (!dt) { log.push([name, 'تجاهل', 'ليست ورقة يوم']); return; }
     const key = name.trim();
     const hidden = sh.isSheetHidden() ? 'مخفية | ' : '';
     const ageDays = (today.getTime() - dt.getTime()) / 864e5;
 
-    if (!full && ageDays > CFG.RECENT_DAYS && prev[key]) {
+    if (!full && ageDays > CFG.RECENT_DAYS && prev[key] && !hot(monthKey_(dt))) {
       prev[key].forEach(r => out.push(r));
       log.push([name, 'من التجميع السابق', hidden.replace(' | ', '')]);
       return;
@@ -148,6 +199,7 @@ function run_(full) {
     const vals = sh.getRange(1, 1, lastRow, Math.min(lastCol, 40)).getValues();
     const res = summarizeSheet_(vals);
     if (res.error) { log.push([name, 'خطأ', hidden + res.error]); return; }
+    monthData.push({ dt: dt, ships: res.ships });
     const notes = [];
     if (res.dup) notes.push('شحنات مكررة تم تجاهلها: ' + res.dup);
     let tot = 0, oth = 0;
@@ -175,6 +227,22 @@ function run_(full) {
     sum.getRange(2, 1, out.length, 1).setNumberFormat('yyyy-mm-dd');
   }
   sum.setFrozenRows(1);
+
+  // الشهري: الأشهر الساخنة تُبنى من الأوراق، والباقي يُعاد من التجميع السابق
+  const monRows = buildMonthly_(monthData).filter(r => hot(r[0]));
+  Object.keys(monPrev).forEach(mk => { if (!hot(mk)) monPrev[mk].forEach(r => monRows.push(r)); });
+  monRows.sort((a, b) => String(a[0]).localeCompare(String(b[0])) || String(a[1]).localeCompare(String(b[1]), 'ar'));
+  const mhead = ['الشهر', 'الفرع', 'الشحنات (فريدة)', 'تم التحديث (أوديت)', 'لم يتم التحديث (أوديت)', 'بدون رد الأوديت',
+    'بدون رد الفرع', 'تعارض (رد الفرع تم والأوديت لم يتم)', 'آخر جرد', 'أيام الجرد'];
+  const msh = ss.getSheetByName(CFG.MONTHLY) || ss.insertSheet(CFG.MONTHLY);
+  msh.clear();
+  msh.getRange(1, 1, 1, mhead.length).setValues([mhead]).setFontWeight('bold');
+  if (monRows.length) {
+    msh.getRange(2, 1, monRows.length, 1).setNumberFormat('@');
+    msh.getRange(2, 1, monRows.length, mhead.length).setValues(monRows);
+    msh.getRange(2, 9, monRows.length, 1).setNumberFormat('yyyy-mm-dd');
+  }
+  msh.setFrozenRows(1);
 
   const lg = ss.getSheetByName(CFG.LOG) || ss.insertSheet(CFG.LOG);
   lg.clear();
