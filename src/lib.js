@@ -83,3 +83,14 @@ export function sumMonthly(rows) {
   const pc = (v) => (t.total ? (v / t.total) * 100 : 0);
   return { ...t, rate: pc(t.upd), p_not: pc(t.not_upd), p_no_audit: pc(t.no_audit), p_no_branch: pc(t.no_branch_reply), p_conflict: pc(t.conflict) };
 }
+
+// الجمعة إجازة: لا تُحسب يومًا ناقصًا (0 = الأحد ... 5 = الجمعة)
+export const OFF_DAY = 5;
+export const isOff = (d) => new Date(d + 'T00:00:00Z').getUTCDay() === OFF_DAY;
+export const addDays = (d, n) => new Date(new Date(d + 'T00:00:00Z').getTime() + n * 864e5).toISOString().slice(0, 10);
+// أيام العمل الناقصة (بدون الجمعة) بين تاريخين غير شاملين
+export function missingWorkDays(a, b) {
+  const out = [];
+  for (let d = addDays(a, 1); d < b; d = addDays(d, 1)) if (!isOff(d)) out.push(d);
+  return out;
+}

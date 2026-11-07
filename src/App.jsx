@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import ChartBox from './ChartBox.jsx';
-import { N, fi, fp, sgn, sum, sumMonthly, LEVELS, levelOf, toCsv, download, loadCfg, saveCfg, demoRows, demoMonthly } from './lib.js';
+import { N, fi, fp, sgn, sum, sumMonthly, isOff, addDays, missingWorkDays, LEVELS, levelOf, toCsv, download, loadCfg, saveCfg, demoRows, demoMonthly } from './lib.js';
 
 const ENV_URL = import.meta.env.VITE_DATA_URL;
 const ENV_TOKEN = import.meta.env.VITE_DATA_TOKEN;
@@ -83,7 +83,10 @@ export default function App() {
   const prevMonth = months[months.indexOf(curMonth) - 1];
   const MP = prevMonth ? sumMonthly(monthly.filter((r) => r.month === prevMonth && branchOk(r))) : null;
   const monthLast = monthRows.map((r) => r.last).sort().pop();
-  const monthDays = Math.max(0, ...monthRows.map((r) => N(r.days)));
+  const monthDates = dates.filter((d) => d.startsWith(curMonth || '~') && !isOff(d));
+  let workDays = 0; const missWork = [];
+  if (monthLast) for (let d = monthLast.slice(0, 8) + '01'; d <= monthLast; d = addDays(d, 1)) if (!isOff(d)) { workDays++; if (!dates.includes(d)) missWork.push(d); }
+  const monthDays = monthDates.length;
 
   const reset = () => { setFrom(''); setTo(''); setSel([]); setQ(''); setPage(0); };
   const exportCsv = () => download('branch-inventory.csv', toCsv(inRange, [
@@ -136,9 +139,9 @@ export default function App() {
   if (missing.length) alerts.push({ c: 's-action', i: 'fa-eye-slash', t: `فروع ظهرت في الأيام السابقة وغائبة عن ${snap}: ${missing.join('، ')}` });
   const unaudited = rangeDates.filter((d) => inRange.filter((r) => r.date === d).every((r) => N(r.other) === N(r.total)));
   if (unaudited.length) alerts.push({ c: 's-violation', i: 'fa-clipboard-question', t: `أيام بلا نتيجة جرد: ${unaudited.join('، ')}` });
-  const gaps = [];
-  for (let i = 1; i < dates.length; i++) { const g = Math.round((new Date(dates[i]) - new Date(dates[i - 1])) / 864e5); if (g > 1) gaps.push(`${dates[i - 1]} ← ${dates[i]}`); }
-  if (gaps.length) alerts.push({ c: 's-progress', i: 'fa-calendar-xmark', t: `أيام ناقصة بين الأوراق: ${gaps.join('، ')}` });
+  const gapDays = [];
+  for (let i = 1; i < dates.length; i++) gapDays.push(...missingWorkDays(dates[i - 1], dates[i]));
+  if (gapDays.length) alerts.push({ c: 's-progress', i: 'fa-calendar-xmark', t: `أيام عمل بلا ورقة جرد (الجمعة إجازة ولا تُحسب): ${gapDays.join('، ')}` });
 
   const actions = board.filter((r) => r.lv === 'critical' || r.lv === 'attention').sort((a, b) => N(b.cod_not) - N(a.cod_not)).map((r) => {
     const reasons = [`${fi(r.not_upd)} شحنة غير محدّثة`, `تحصيل ${fi(r.cod_not)} ج.م`];
@@ -233,7 +236,7 @@ export default function App() {
         </div>
 
         {!snapRows.length ? <div className="panel"><p>لا توجد بيانات تطابق الفلاتر الحالية.</p></div> : (<>
-        <Heading tag="الشهر" title={`المؤشرات الشهرية — \u200E${curMonth || '—'}\u200E`} sub={curMonth ? `كل شحنة تُحسب مرة واحدة في الشهر بآخر نتيجة أوديت مسجلة لها. أيام الجرد: ${monthDays}، آخر جرد: ${monthLast}.` : 'لا توجد بيانات شهرية'} />
+        <Heading tag="الشهر" title={`المؤشرات الشهرية — \u200E${curMonth || '—'}\u200E`} sub={curMonth ? `كل شحنة تُحسب مرة واحدة في الشهر بآخر نتيجة أوديت مسجلة لها. أيام الجرد: ${monthDays} من ${workDays} يوم عمل (الجمعة إجازة)${missWork.length ? '، ناقص: ' + missWork.join('، ') : ''}. آخر جرد: ${monthLast}.` : 'لا توجد بيانات شهرية'} />
         {!monthRows.length ? (
           <div className="panel"><p><i className="fa-solid fa-triangle-exclamation warn" /> الكروت الشهرية تحتاج ورقة <b>تجميع_شهري</b> من السكريبت المحدّث (apps-script/ArriveAuditSummary.gs و WebApp.gs) ثم «إعادة بناء كاملة». لم أعرض أرقامًا شهرية تقديرية.</p></div>
         ) : (<>
