@@ -24,6 +24,9 @@ const CFG = {
   // المحرك ب (جدول واحد)
   DATA: 'الجرد', IMPORT: 'استيراد', LEDGER: 'سجل_الشحنات', OPEN: 'الحالات_المفتوحة', MISSING: 'المفقودة', REPEATED: 'المتكررة',
   ARCHIVE: 'الأرشيف', ACTIONS: 'سجل_الإجراءات', ERRORS: 'سجل_الأخطاء', LISTS: 'القوائم',
+  FOLLOW: 'ملخص_المتابعة',          // ورقة يكتبها المحرك ب (JSON للوحة)
+  EXPOSE_LISTS: false,             // true = الويب آب يعرض قوائم شحنات (المفقودة/المفتوحة/المتكررة) للوحة. الافتراضي: أعداد فقط
+  LIST_LIMIT: 40,                  // أقصى عدد صفوف لكل قائمة
   CLOSED: 'تم الغلق',              // حالة الأوديت التي تعني إغلاق رد الأوديت
   OFF_DAY: 5                       // يوم الإجازة (JS: 0=الأحد ... 5=الجمعة)
 };
@@ -87,11 +90,18 @@ function doGet(e) {
     rate: r[6], cod_not: r[7], no_reply: r[8], source: String(r[9])
   }));
   const ms = SpreadsheetApp.getActive().getSheetByName(CFG.MONTHLY);
-  const monthly = (ms && ms.getLastRow() > 1) ? ms.getRange(2, 1, ms.getLastRow() - 1, 10).getValues().map(r => ({
+  const mcols = ms ? Math.min(Math.max(ms.getLastColumn(), 10), 11) : 10;   // العمود 11 (مغلقة) يكتبه المحرك ب فقط
+  const monthly = (ms && ms.getLastRow() > 1) ? ms.getRange(2, 1, ms.getLastRow() - 1, mcols).getValues().map(r => ({
     month: String(r[0]).trim(), branch: r[1], total: r[2], upd: r[3], not_upd: r[4], no_audit: r[5],
-    no_branch_reply: r[6], conflict: r[7], last: Utilities.formatDate(new Date(r[8]), tz, 'yyyy-MM-dd'), days: r[9]
+    no_branch_reply: r[6], conflict: r[7], last: Utilities.formatDate(new Date(r[8]), tz, 'yyyy-MM-dd'), days: r[9],
+    closed: (mcols > 10 && r[10] !== '') ? r[10] : null
   })) : [];
-  return json_(Object.assign({ rows: rows, monthly: monthly }, meta));
+  // ملخص المتابعة (المحرك ب): القوائم لا تُرسل إلا إن فعّلت CFG.EXPOSE_LISTS
+  let follow = null;
+  const fs = SpreadsheetApp.getActive().getSheetByName(CFG.FOLLOW);
+  if (fs && fs.getLastRow() >= 2) { try { follow = JSON.parse(fs.getRange(2, 1).getValue()); } catch (err) { follow = null; } }
+  if (follow && !CFG.EXPOSE_LISTS) follow.lists = null;
+  return json_(Object.assign({ rows: rows, monthly: monthly, follow: follow }, meta));
 }
 
 function json_(o) {
@@ -368,8 +378,9 @@ function buildOutputs_(recs, opts) {
   // --- شهري + سجل الشحنات
   const months = {}, led = {};
   recs.forEach(r => {
-    const mk = r.dk.slice(0, 7), m = months[mk] || (months[mk] = { ships: {}, days: {} });
+    const mk = r.dk.slice(0, 7), m = months[mk] || (months[mk] = { ships: {}, days: {}, closed: {} });
     m.days[r.dk] = 1; const p = m.ships[r.awb];
+    if (norm_(r.aStatus) === CL) m.closed[r.awb] = 1;   // أُغلقت في أي يوم من الشهر
     if (!p || r.res !== 'other' || p.res === 'other') m.ships[r.awb] = r;
     const e = led[r.awb] || (led[r.awb] = { first: r.dk, days: {}, branches: [], res: 'other', reply: '', ast: '', com: '', rdt: '', cdt: '', status: '' });
     e.last = r.dk; e.days[r.dk] = 1; e.status = r.status; e.branch = r.branch;
@@ -385,10 +396,10 @@ function buildOutputs_(recs, opts) {
   const monthlyRows = [];
   Object.keys(months).sort().forEach(mk => {
     const m = months[mk], by = {};
-    Object.keys(m.ships).forEach(a => { const s = m.ships[a], o = by[s.branch] || (by[s.branch] = { t: 0, upd: 0, not: 0, other: 0, nr: 0, cf: 0 });
-      o.t++; o[s.res]++; if (!norm_(s.reply)) o.nr++; if (s.res === 'not' && norm_(s.reply) === norm_('تم التحديث')) o.cf++; });
+    Object.keys(m.ships).forEach(a => { const s = m.ships[a], o = by[s.branch] || (by[s.branch] = { t: 0, upd: 0, not: 0, other: 0, nr: 0, cf: 0, cl: 0 });
+      o.t++; o[s.res]++; if (m.closed[a]) o.cl++; if (!norm_(s.reply)) o.nr++; if (s.res === 'not' && norm_(s.reply) === norm_('تم التحديث')) o.cf++; });
     const dk = Object.keys(m.days).sort();
-    Object.keys(by).sort().forEach(b => { const o = by[b]; monthlyRows.push([mk, b, o.t, o.upd, o.not, o.other, o.nr, o.cf, toDate_(dk[dk.length - 1]), dk.length]); });
+    Object.keys(by).sort().forEach(b => { const o = by[b]; monthlyRows.push([mk, b, o.t, o.upd, o.not, o.other, o.nr, o.cf, toDate_(dk[dk.length - 1]), dk.length, o.cl]); });
   });
   const LBL = { upd: 'محدّثة', not: 'غير محدّثة', other: 'لم تُراجع' };
   const ledgerRows = [], openRows = [], missRows = [], repRows = [], archRows = [];
@@ -405,7 +416,35 @@ function buildOutputs_(recs, opts) {
     if (rep === 'نعم') repRows.push([a, days, allB, e.status, toDate_(e.last)]);
     if (state === 'مغلقة') archRows.push([a, e.branch, e.status, e.reply, e.com, e.ast, toDate_(e.first), e.cdt ? toDate_(e.cdt) : '', clos]);
   });
-  return { dailyRows: dailyRows, monthlyRows: monthlyRows, ledgerRows: ledgerRows, openRows: openRows, missRows: missRows, repRows: repRows, archRows: archRows };
+  return { dailyRows: dailyRows, monthlyRows: monthlyRows, ledgerRows: ledgerRows, openRows: openRows, missRows: missRows, repRows: repRows, archRows: archRows,
+    follow: buildFollow_(ledgerRows, maxDay, opts.listLimit || 40) };
+}
+
+// ملخص المتابعة للوحة من صفوف سجل الشحنات (أعداد + أرقام قياسية + قوائم اختيارية)
+function buildFollow_(L, maxDay, limit) {
+  const r1 = x => Math.round(x * 10) / 10, avg = a => a.length ? r1(a.reduce((s, v) => s + v, 0) / a.length) : null, n = L.length;
+  const cnt = st => L.filter(x => x[14] === st).length, pct = v => n ? r1(v / n * 100) : 0;
+  const resp = L.map(x => x[11]).filter(v => v !== '' && v != null), clos = L.map(x => x[12]).filter(v => v !== '' && v != null);
+  const by = {};
+  L.forEach(x => { const o = by[x[1]] || (by[x[1]] = { branch: x[1], total: 0, open: 0, closed: 0, missing: 0, ended: 0, repeated: 0, resp: [] });
+    o.total++; if (x[14] === 'مفتوحة') o.open++; else if (x[14] === 'مغلقة') o.closed++; else if (x[14] === 'مفقودة') o.missing++; else o.ended++;
+    if (x[15] === 'نعم') o.repeated++; if (x[11] !== '' && x[11] != null) o.resp.push(x[11]); });
+  const branches = Object.keys(by).sort().map(b => { const o = by[b]; return { branch: o.branch, total: o.total, open: o.open, closed: o.closed, missing: o.missing, ended: o.ended, repeated: o.repeated, avg_resp: avg(o.resp) }; });
+  const D = d => (d instanceof Date) ? dayKey_(d) : (d || '');
+  const top = (arr, key) => arr.sort((a, b) => b[key] - a[key]).slice(0, limit);
+  return {
+    asOf: maxDay,
+    kpi: { total: n, open: cnt('مفتوحة'), closed: cnt('مغلقة'), missing: cnt('مفقودة'), ended: cnt('منتهية'),
+      close_rate: pct(cnt('مغلقة')), missing_rate: pct(cnt('مفقودة')), repeated_rate: pct(L.filter(x => x[15] === 'نعم').length),
+      avg_appearances: n ? r1(L.reduce((s, x) => s + x[5], 0) / n) : 0, avg_response_days: avg(resp), avg_close_days: avg(clos),
+      oldest_open_days: Math.max(0, ...L.filter(x => x[14] === 'مفتوحة').map(x => x[13])) },
+    branches: branches,
+    lists: {
+      missing: top(L.filter(x => x[14] === 'مفقودة').map(x => ({ awb: x[0], branch: x[1], status: x[6], last_seen: D(x[4]), missing_days: x[16], a_status: x[10] })), 'missing_days'),
+      open: top(L.filter(x => x[14] === 'مفتوحة').map(x => ({ awb: x[0], branch: x[1], status: x[6], open_days: x[13], a_status: x[10] })), 'open_days'),
+      repeated: top(L.filter(x => x[15] === 'نعم').map(x => ({ awb: x[0], branch: x[1], days: x[5], status: x[6] })), 'days')
+    }
+  };
 }
 
 // الاستيراد: importRows [{awb, reply, comment, astatus, by}], latest: {awb: [rowNumbers]} لآخر يوم جرد
@@ -486,6 +525,13 @@ function applyImport() {
   SpreadsheetApp.getUi().alert('تم تطبيق ' + plan.actions.length + ' صف، ورُفض ' + plan.errors.length + ' (راجع سجل_الأخطاء).');
 }
 
+function un_writeFollow_(ss, follow) {
+  let json = JSON.stringify(follow);
+  if (json.length > 48000) { follow = Object.assign({}, follow, { lists: null }); json = JSON.stringify(follow); }   // حد الخلية 50 ألف حرف
+  const sh = retry_(() => ss.getSheetByName(CFG.FOLLOW) || ss.insertSheet(CFG.FOLLOW));
+  retry_(() => sh.getRange(1, 1, 3, 1).setValues([['ملخص المتابعة (JSON تقرؤه اللوحة، لا تعدّله يدويًا)'], [json], [new Date().toISOString()]]));
+}
+
 function un_run_() {
   const ss = SpreadsheetApp.getActive(), sh = ss.getSheetByName(CFG.DATA), last = lastRow_(sh, 2); if (last < 2) return;
   const vals = sh.getRange(1, 1, last, sh.getLastColumn()).getValues(), cm = colMap_(vals[0]);
@@ -496,14 +542,15 @@ function un_run_() {
     recs.push({ date: row[cm.col.date], awb: awb, branch: br, res: resultOf_(row[cm.col.result]), reply: row[cm.col.reply], status: row[cm.col.status], aStatus: row[cm.col.astatus], aComment: row[cm.col.acomment], replyDt: row[cm.col.rdt], closeDt: row[cm.col.closedt], cod: row[cm.col.cod] }); }
   const lst = ss.getSheetByName(CFG.LISTS), terminal = lst ? lst.getRange(2, 6, 25, 1).getValues().map(x => x[0]).filter(String) : [];
   const repeatDays = lst ? Number(lst.getRange('I8').getValue()) || 3 : 3;
-  const o = buildOutputs_(recs, { terminal: terminal, repeatDays: repeatDays });
+  const o = buildOutputs_(recs, { terminal: terminal, repeatDays: repeatDays, listLimit: CFG.LIST_LIMIT });
   writeTable_(ss, CFG.SUMMARY, ['التاريخ', 'الفرع', 'الشحنات', 'تم التحديث', 'لم يتم التحديث', 'غير محدد', 'نسبة التحديث %', 'تحصيل غير محدّث', 'بدون رد', 'الورقة المصدر'], o.dailyRows, { dates: [1] });
-  writeTable_(ss, CFG.MONTHLY, ['الشهر', 'الفرع', 'الشحنات (فريدة)', 'تم التحديث (أوديت)', 'لم يتم التحديث (أوديت)', 'بدون رد الأوديت', 'بدون رد الفرع', 'تعارض (رد الفرع تم والأوديت لم يتم)', 'آخر جرد', 'أيام الجرد'], o.monthlyRows, { text: [1], dates: [9] });
+  writeTable_(ss, CFG.MONTHLY, ['الشهر', 'الفرع', 'الشحنات (فريدة)', 'تم التحديث (أوديت)', 'لم يتم التحديث (أوديت)', 'بدون رد الأوديت', 'بدون رد الفرع', 'تعارض (رد الفرع تم والأوديت لم يتم)', 'آخر جرد', 'أيام الجرد', 'مغلقة (تم الغلق)'], o.monthlyRows, { text: [1], dates: [9] });
   writeTable_(ss, CFG.LEDGER, ['رقم البوليصة', 'الفرع الأخير', 'كل الفروع', 'أول ظهور', 'آخر ظهور', 'أيام الظهور', 'آخر حالة شحنة', 'آخر رد فرع', 'آخر نتيجة أوديت', 'آخر تعليق أوديت', 'آخر حالة أوديت', 'أيام استجابة الفرع', 'أيام الإغلاق', 'أيام مفتوحة', 'الحالة', 'متكررة؟', 'أيام مفقودة', 'أول يوم اختفاء'], o.ledgerRows, { dates: [4, 5, 18] });
   writeTable_(ss, CFG.OPEN, ['رقم البوليصة', 'الفرع', 'آخر حالة', 'رد الفرع', 'تعليق الأوديت', 'حالة الأوديت', 'أول ظهور', 'آخر ظهور', 'عدد الأيام'], o.openRows, { dates: [7, 8] });
   writeTable_(ss, CFG.MISSING, ['رقم البوليصة', 'آخر فرع', 'آخر حالة', 'آخر يوم ظهرت', 'أول يوم اختفاء', 'عدد الأيام المفقودة', 'تعليق الأوديت', 'رد الفرع', 'حالة الأوديت'], o.missRows, { dates: [4, 5] });
   writeTable_(ss, CFG.REPEATED, ['رقم البوليصة', 'عدد مرات الظهور', 'الفروع', 'آخر حالة', 'آخر ظهور'], o.repRows, { dates: [5] });
   writeTable_(ss, CFG.ARCHIVE, ['رقم البوليصة', 'الفرع', 'آخر حالة', 'رد الفرع', 'تعليق الأوديت', 'حالة الأوديت', 'أول ظهور', 'تاريخ الإغلاق', 'أيام الإغلاق'], o.archRows, { dates: [7, 8] });
+  un_writeFollow_(ss, o.follow);
   un_logAction_(ss, [[nowStamp_(), '', 'تحديث التجميع', Session.getActiveUser().getEmail(), 'شحنات: ' + o.ledgerRows.length + ' | مفتوحة: ' + o.openRows.length + ' | مفقودة: ' + o.missRows.length]]);
 }
 

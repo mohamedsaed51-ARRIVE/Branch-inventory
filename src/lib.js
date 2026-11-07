@@ -72,16 +72,17 @@ export function demoMonthly(rows) {
       const upd = Math.round(total * avg / 100);
       const not_upd = Math.max(0, total - upd - no_audit);
       const noReplyBranch = br.some((r) => N(r.no_reply) > 0);
-      out.push({ month: m, branch: b, total, upd, not_upd, no_audit, no_branch_reply: noReplyBranch ? Math.round(total * 0.9) : Math.round(total * 0.03), conflict: Math.round(not_upd * 0.05), last: br[br.length - 1].date, days: br.length });
+      out.push({ month: m, branch: b, closed: Math.round(total * 0.2), total, upd, not_upd, no_audit, no_branch_reply: noReplyBranch ? Math.round(total * 0.9) : Math.round(total * 0.03), conflict: Math.round(not_upd * 0.05), last: br[br.length - 1].date, days: br.length });
     });
   });
   return out;
 }
 export function sumMonthly(rows) {
-  const t = { total: 0, upd: 0, not_upd: 0, no_audit: 0, no_branch_reply: 0, conflict: 0 };
+  const t = { total: 0, upd: 0, not_upd: 0, no_audit: 0, no_branch_reply: 0, conflict: 0, closed: 0 };
   rows.forEach((r) => Object.keys(t).forEach((k) => { t[k] += N(r[k]); }));
+  const hasClosed = rows.some((r) => r.closed != null);
   const pc = (v) => (t.total ? (v / t.total) * 100 : 0);
-  return { ...t, rate: pc(t.upd), p_not: pc(t.not_upd), p_no_audit: pc(t.no_audit), p_no_branch: pc(t.no_branch_reply), p_conflict: pc(t.conflict) };
+  return { ...t, rate: pc(t.upd), p_not: pc(t.not_upd), p_no_audit: pc(t.no_audit), p_no_branch: pc(t.no_branch_reply), p_conflict: pc(t.conflict), p_closed: pc(t.closed), hasClosed };
 }
 
 // الجمعة إجازة: لا تُحسب يومًا ناقصًا (0 = الأحد ... 5 = الجمعة)
@@ -93,4 +94,25 @@ export function missingWorkDays(a, b) {
   const out = [];
   for (let d = addDays(a, 1); d < b; d = addDays(d, 1)) if (!isOff(d)) out.push(d);
   return out;
+}
+
+// ملخص متابعة تجريبي للمعاينة فقط (غير حقيقي)
+export function demoFollow(rows) {
+  const branches = [...new Set(rows.map((r) => r.branch))].sort();
+  const bl = branches.map((b, i) => {
+    const total = 60 + i * 9, closed = Math.round(total * (0.12 + (i % 4) * 0.06)), missing = (i * 3 + 2) % 11, open = Math.round(total * 0.35), ended = total - closed - missing - open;
+    return { branch: b, total, open, closed, missing, ended, repeated: Math.round(total * 0.3), avg_resp: Math.round((0.4 + (i % 5) * 0.5) * 10) / 10 };
+  });
+  const S = (k) => bl.reduce((a, b) => a + b[k], 0), n = S('total'), r1 = (v) => Math.round(v * 10) / 10;
+  const mk = (len, fn) => Array.from({ length: len }, (_, i) => fn(i));
+  return {
+    asOf: rows.map((r) => r.date).sort().pop(),
+    kpi: { total: n, open: S('open'), closed: S('closed'), missing: S('missing'), ended: S('ended'), close_rate: r1(S('closed') / n * 100), missing_rate: r1(S('missing') / n * 100), repeated_rate: r1(S('repeated') / n * 100), avg_appearances: 2.2, avg_response_days: 1.4, avg_close_days: 2.1, oldest_open_days: 12 },
+    branches: bl,
+    lists: {
+      missing: mk(8, (i) => ({ awb: 'DEMO-M' + (1000 + i), branch: branches[i % branches.length], status: 'in transit', last_seen: rows[0].date, missing_days: 8 - i, a_status: 'مفتوح' })),
+      open: mk(8, (i) => ({ awb: 'DEMO-O' + (2000 + i), branch: branches[(i + 2) % branches.length], status: 'قيد التوصيل', open_days: 12 - i, a_status: 'تحت المراجعة' })),
+      repeated: mk(8, (i) => ({ awb: 'DEMO-R' + (3000 + i), branch: branches[(i + 4) % branches.length], days: 9 - i, status: 'in transit' }))
+    }
+  };
 }

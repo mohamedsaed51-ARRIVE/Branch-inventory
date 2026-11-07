@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import ChartBox from './ChartBox.jsx';
-import { N, fi, fp, sgn, sum, sumMonthly, isOff, addDays, missingWorkDays, LEVELS, levelOf, toCsv, download, loadCfg, saveCfg, demoRows, demoMonthly } from './lib.js';
+import Follow from './Follow.jsx';
+import { N, fi, fp, sgn, sum, sumMonthly, isOff, addDays, missingWorkDays, LEVELS, levelOf, toCsv, download, loadCfg, saveCfg, demoRows, demoMonthly, demoFollow } from './lib.js';
 
 const ENV_URL = import.meta.env.VITE_DATA_URL;
 const ENV_TOKEN = import.meta.env.VITE_DATA_TOKEN;
@@ -8,11 +9,11 @@ const DEFAULTS = { url: '', refreshMin: 15, excellent: 90, good: 80, bad: 50 };
 const PAGE = 15;
 
 function useData(url, refreshMin, demo) {
-  const [s, set] = useState({ status: 'idle', rows: [], monthly: [], at: null, building: false });
+  const [s, set] = useState({ status: 'idle', rows: [], monthly: [], follow: null, at: null, building: false });
   // rebuild === true: يطلب من Apps Script إعادة التجميع أولًا (زر «تحديث»). التحديث التلقائي بالوقت قراءة فقط.
   const run = useCallback((rebuild) => {
     const build = rebuild === true;
-    if (demo) { const d = demoRows(); set({ status: 'ok', rows: d, monthly: demoMonthly(d), at: new Date(), generated: 'demo', building: false }); return; }
+    if (demo) { const d = demoRows(); set({ status: 'ok', rows: d, monthly: demoMonthly(d), follow: demoFollow(d), at: new Date(), generated: 'demo', building: false }); return; }
     if (!url) { set({ status: 'nourl', rows: [], monthly: [], at: null, building: false }); return; }
     const q = [];
     if (ENV_TOKEN) q.push('token=' + encodeURIComponent(ENV_TOKEN));
@@ -21,7 +22,7 @@ function useData(url, refreshMin, demo) {
     set((p) => ({ ...p, status: p.rows.length ? 'refreshing' : 'loading', building: build, note: '' }));
     fetch(u).then((r) => r.json()).then((j) => {
       if (j.error) throw new Error(j.error);
-      set({ status: 'ok', rows: j.rows || [], monthly: j.monthly || [], at: new Date(), generated: j.generated, built: j.built, note: j.note, refreshed: j.refreshed, building: false });
+      set({ status: 'ok', rows: j.rows || [], monthly: j.monthly || [], follow: j.follow || null, at: new Date(), generated: j.generated, built: j.built, note: j.note, refreshed: j.refreshed, building: false });
     }).catch((e) => set((p) => ({ ...p, status: 'error', msg: String(e.message || e), building: false })));
   }, [url, demo]);
   useEffect(() => { run(false); }, [run]);
@@ -50,7 +51,7 @@ export default function App() {
   const [demoOn, setDemoOn] = useState(() => new URLSearchParams(location.search).get('demo') === '1');
   const [showSet, setShowSet] = useState(false);
   const url = cfg.url || ENV_URL || '';
-  const { status, rows, monthly, at, msg, generated, built, note, building, reload } = useData(url, cfg.refreshMin, demoOn);
+  const { status, rows, monthly, follow, at, msg, generated, built, note, building, reload } = useData(url, cfg.refreshMin, demoOn);
 
   useEffect(() => { document.documentElement.setAttribute('data-theme', theme); saveCfg('bi_theme', theme); }, [theme]);
 
@@ -142,6 +143,11 @@ export default function App() {
   const recent = dates.slice(Math.max(0, dates.indexOf(snap) - 14), dates.indexOf(snap));
   const missing = [...new Set(rows.filter((r) => recent.includes(r.date)).map((r) => r.branch))].filter((b) => (!sel.length || sel.includes(b)) && !snapRows.some((r) => r.branch === b));
   if (missing.length) alerts.push({ c: 's-action', i: 'fa-eye-slash', t: `فروع ظهرت في الأيام السابقة وغائبة عن ${snap}: ${missing.join('، ')}` });
+  if (follow) {
+    const fb = follow.branches.filter((b) => branchOk({ branch: b.branch }) && N(b.missing) > 0).sort((a, b) => b.missing - a.missing);
+    fb.slice(0, 5).forEach((b) => alerts.push({ c: 's-violation', i: 'fa-magnifying-glass-minus', t: `${b.branch}: ${fi(b.missing)} شحنة مفقودة (اختفت من الجرد بلا إغلاق)` }));
+    if (fb.length > 5) alerts.push({ c: 's-violation', i: 'fa-magnifying-glass-minus', t: `و${fb.length - 5} فروع أخرى فيها شحنات مفقودة (راجع قسم المتابعة)` });
+  }
   const unaudited = rangeDates.filter((d) => inRange.filter((r) => r.date === d).every((r) => N(r.other) === N(r.total)));
   if (unaudited.length) alerts.push({ c: 's-violation', i: 'fa-clipboard-question', t: `أيام بلا نتيجة جرد: ${unaudited.join('، ')}` });
   const gapDays = [];
@@ -152,6 +158,8 @@ export default function App() {
     const reasons = [`${fi(r.not_upd)} شحنة غير محدّثة`, `تحصيل ${fi(r.cod_not)} ج.م`];
     const acts = [r.lv === 'critical' ? 'طلب خطة تصحيح وموعد تقفيل من الفرع' : 'متابعة الشحنات غير المحدّثة مع الفرع'];
     if (N(r.no_reply)) { reasons.push(`${fi(r.no_reply)} بدون رد`); acts.push('طلب رد الفرع على الجرد'); }
+    const fbr = follow && follow.branches.find((b) => b.branch === r.branch);
+    if (fbr && N(fbr.missing) > 0) { reasons.push(`${fi(fbr.missing)} شحنة مفقودة`); acts.push('مراجعة الشحنات المفقودة وتأكيد إغلاقها أو تسليمها'); }
     return { ...r, reasons, acts };
   });
   const copyActions = async () => {
@@ -255,6 +263,7 @@ export default function App() {
             <span className="d muted">تم التحديث {fi(M.upd)} من {fi(M.total)}{MP ? ` — الشهر السابق ${fp(MP.rate)}` : ''}</span></div>
           <div className="kpi accent-warn"><span className="l">غير محدّثة <span className="chip s-progress">حسب الأوديت</span></span><span className="v">{fi(M.not_upd)}</span><span className="d muted">{fp(M.p_not)} من الشحنات</span></div>
           <div className="kpi accent-bad"><span className="l">بدون رد الفرع <span className="chip s-action">حسب الفرع</span></span><span className="v">{fi(M.no_branch_reply)}</span><span className="d muted">{fp(M.p_no_branch)} من الشحنات (عمود رد الفرع فارغ)</span></div>
+          {M.hasClosed && <div className="kpi accent-ok"><span className="l">مغلقة (تم الغلق) <span className="chip s-progress">حسب الأوديت</span></span><span className="v">{fi(M.closed)}</span><span className="d muted">{fp(M.p_closed)} من الشحنات (إغلاق رد الأوديت)</span></div>}
           <div className="kpi accent-teal"><span className="l">بدون رد الأوديت <span className="chip s-progress">حسب الأوديت</span></span><span className="v">{fi(M.no_audit)}</span><span className="d muted">{fp(M.p_no_audit)} من الشحنات (تعليق الأوديت فارغ أو غير مطابق)</span></div>
         </div>
         <p className="section-sub" style={{ marginTop: 8 }}>
@@ -273,6 +282,10 @@ export default function App() {
         </table></div>
         <p className="section-sub">«تعارض» = رد الفرع «تم التحديث» لكن الأوديت يقول «لم يتم التحديث».</p>
         </>)}
+
+        {follow ? <Follow follow={follow} theme={theme} branchOk={branchOk} /> : (
+          <div className="panel" style={{ marginTop: 12 }}><p className="muted"><i className="fa-solid fa-circle-info" /> مؤشرات المتابعة (مفتوحة ومغلقة ومفقودة ومتكررة وزمن الاستجابة) تظهر عند استخدام النظام الموحّد (ورقة «الجرد» الواحدة) مع Code.gs المحدّث.</p></div>
+        )}
 
         <Heading tag="أداء" title="صحة الفروع" sub={`ممتاز ≥ ${th.excellent}% — جيد ≥ ${th.good}% — يحتاج انتباه ≥ ${th.bad}% — حرج أقل من ذلك (حدود للعرض وليست سياسة معتمدة)`} />
         <div className="panel tscroll"><table>
