@@ -8,21 +8,26 @@ const DEFAULTS = { url: '', refreshMin: 15, excellent: 90, good: 80, bad: 50 };
 const PAGE = 15;
 
 function useData(url, refreshMin, demo) {
-  const [s, set] = useState({ status: 'idle', rows: [], monthly: [], at: null });
-  const run = useCallback(() => {
-    if (demo) { const d = demoRows(); set({ status: 'ok', rows: d, monthly: demoMonthly(d), at: new Date(), generated: 'demo' }); return; }
-    if (!url) { set({ status: 'nourl', rows: [], at: null }); return; }
-    const u = ENV_TOKEN ? url + (url.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(ENV_TOKEN) : url;
-    set((p) => ({ ...p, status: p.rows.length ? 'refreshing' : 'loading' }));
+  const [s, set] = useState({ status: 'idle', rows: [], monthly: [], at: null, building: false });
+  // rebuild === true: يطلب من Apps Script إعادة التجميع أولًا (زر «تحديث»). التحديث التلقائي بالوقت قراءة فقط.
+  const run = useCallback((rebuild) => {
+    const build = rebuild === true;
+    if (demo) { const d = demoRows(); set({ status: 'ok', rows: d, monthly: demoMonthly(d), at: new Date(), generated: 'demo', building: false }); return; }
+    if (!url) { set({ status: 'nourl', rows: [], monthly: [], at: null, building: false }); return; }
+    const q = [];
+    if (ENV_TOKEN) q.push('token=' + encodeURIComponent(ENV_TOKEN));
+    if (build) q.push('refresh=1');
+    const u = q.length ? url + (url.includes('?') ? '&' : '?') + q.join('&') : url;
+    set((p) => ({ ...p, status: p.rows.length ? 'refreshing' : 'loading', building: build, note: '' }));
     fetch(u).then((r) => r.json()).then((j) => {
       if (j.error) throw new Error(j.error);
-      set({ status: 'ok', rows: j.rows || [], monthly: j.monthly || [], at: new Date(), generated: j.generated });
-    }).catch((e) => set((p) => ({ ...p, status: 'error', msg: String(e.message || e) })));
+      set({ status: 'ok', rows: j.rows || [], monthly: j.monthly || [], at: new Date(), generated: j.generated, built: j.built, note: j.note, refreshed: j.refreshed, building: false });
+    }).catch((e) => set((p) => ({ ...p, status: 'error', msg: String(e.message || e), building: false })));
   }, [url, demo]);
-  useEffect(() => { run(); }, [run]);
+  useEffect(() => { run(false); }, [run]);
   useEffect(() => {
     if (demo || !refreshMin || !url) return undefined;
-    const id = setInterval(run, refreshMin * 60000);
+    const id = setInterval(() => run(false), refreshMin * 60000);
     return () => clearInterval(id);
   }, [run, refreshMin, url, demo]);
   return { ...s, reload: run };
@@ -45,7 +50,7 @@ export default function App() {
   const [demoOn, setDemoOn] = useState(() => new URLSearchParams(location.search).get('demo') === '1');
   const [showSet, setShowSet] = useState(false);
   const url = cfg.url || ENV_URL || '';
-  const { status, rows, monthly, at, msg, generated, reload } = useData(url, cfg.refreshMin, demoOn);
+  const { status, rows, monthly, at, msg, generated, built, note, building, reload } = useData(url, cfg.refreshMin, demoOn);
 
   useEffect(() => { document.documentElement.setAttribute('data-theme', theme); saveCfg('bi_theme', theme); }, [theme]);
 
@@ -100,7 +105,7 @@ export default function App() {
       <div className="top"><div className="top-inner">
         <div className="brand"><h1>لوحة متابعة جرد الفروع</h1><p>ARRIVE — الإدارة المالية والتدقيق الداخلي</p></div>
         <div className="hbtns">
-          <button className="hbtn" onClick={reload}><i className="fa-solid fa-rotate" />تحديث</button>
+          <button className="hbtn" onClick={() => reload(true)} disabled={building}><i className={'fa-solid fa-rotate' + (building ? ' fa-spin' : '')} />{building ? 'جارٍ التحديث…' : 'تحديث'}</button>
           <button className="hbtn" onClick={() => setCmp((c) => ({ ...c, on: !c.on, a: c.a || prevDate || dates[0] || '', b: c.b || snap || '' }))}><i className="fa-solid fa-right-left" />وضع المقارنة</button>
           <button className="hbtn" onClick={exportCsv}><i className="fa-solid fa-file-csv" />تصدير</button>
           <button className="hbtn" onClick={() => setShowSet(true)}><i className="fa-solid fa-gear" />إعدادات</button>
@@ -119,7 +124,7 @@ export default function App() {
       <button className="btn" onClick={() => setDemoOn(true)}>معاينة ببيانات تجريبية</button></div></>);
   }
   if (status === 'loading') return <>{header}{modal}<div className="empty muted">جارٍ تحميل البيانات…</div></>;
-  if (status === 'error' && !rows.length) return <>{header}{modal}<div className="empty"><h2 className="bad">تعذر تحميل البيانات</h2><p>{msg}</p><button className="btn" onClick={reload}>إعادة المحاولة الآن</button></div></>;
+  if (status === 'error' && !rows.length) return <>{header}{modal}<div className="empty"><h2 className="bad">تعذر تحميل البيانات</h2><p>{msg}</p><button className="btn" onClick={() => reload(false)}>إعادة المحاولة الآن</button></div></>;
   if (!rows.length) return <>{header}{modal}<div className="empty"><p>لا توجد صفوف في ورقة تجميع_الجرد بعد. شغّل التجميع في الشيت.</p></div></>;
 
   /* ---------- حسابات ---------- */
@@ -200,18 +205,22 @@ export default function App() {
         <div className="meta">
           <span className={'chip ' + connCls}><span className="dot" />{connLabel}</span>
           <span>آخر تحديث للبيانات: <b className="fi">{generated && generated !== 'demo' ? generated.slice(0, 16).replace('T', ' ') + ' UTC' : at ? at.toLocaleString('en-GB') : '—'}</b></span>
+          {built && <span>آخر تجميع من الشيت: <b className="fi">{built.slice(0, 16).replace('T', ' ')} UTC</b></span>}
           <span>تاريخ الجرد المعروض: <b className="fi">{snap}</b></span>
           <span>السجلات: <b className="fi">{fi(rows.length)}</b></span>
           <span>الفروع: <b className="fi">{allBranches.length}</b></span>
           <span>نتيجة الجرد مستنتجة من عمود «تعليق الأوديت»</span>
         </div>
 
+        {building && <div className="alert s-progress"><i className="fa-solid fa-spinner fa-spin" /><span>جارٍ تحديث التجميع من الشيت ثم البيانات… قد يستغرق دقيقة أو أكثر. لا تغلق الصفحة.</span></div>}
+        {!building && note === 'throttled' && <div className="alert s-action"><i className="fa-solid fa-clock" /><span>التجميع اتحدّث من أقل من دقيقة، فعُرضت آخر بيانات بدون إعادة تجميع. جرّب بعد قليل.</span></div>}
+        {!building && note === 'busy' && <div className="alert s-action"><i className="fa-solid fa-hourglass-half" /><span>تجميع آخر شغّال الآن في الشيت. عُرضت آخر بيانات جاهزة، وحدّث بعد قليل.</span></div>}
         <div className="control">
           <div>المعروض بعد الفلاتر: <b className="fi">{fi(inRange.length)}</b> صف
             {alerts.length > 0 && <span className="chip s-violation" style={{ marginInlineStart: 10 }}><i className="fa-solid fa-bell" />{alerts.length} تنبيه</span>}
           </div>
           <div className="qa">
-            <button className="qa-btn" onClick={reload}><i className="fa-solid fa-rotate" />تحديث</button>
+            <button className="qa-btn" onClick={() => reload(true)} disabled={building}><i className="fa-solid fa-rotate" />تحديث</button>
             <button className="qa-btn" onClick={reset}><i className="fa-solid fa-filter-circle-xmark" />إعادة تصفية</button>
             <button className="qa-btn" onClick={exportCsv}><i className="fa-solid fa-file-csv" />تصدير CSV</button>
             <button className="qa-btn" onClick={() => window.print()}><i className="fa-solid fa-print" />طباعة</button>

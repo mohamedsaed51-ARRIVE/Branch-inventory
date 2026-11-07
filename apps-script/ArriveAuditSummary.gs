@@ -147,8 +147,8 @@ function buildMonthly_(sheetsData) {
 function buildAuditSummary(full) {
   full = (full === true);  // المشغّلات تمرر كائنًا، فلا يُعتبر إعادة بناء كاملة
   const lock = LockService.getScriptLock();
-  if (!lock.tryLock(30000)) return;
-  try { run_(full); } finally { lock.releaseLock(); }
+  if (!lock.tryLock(30000)) return false;
+  try { run_(full); PropertiesService.getScriptProperties().setProperty('LAST_BUILD', new Date().toISOString()); return true; } finally { lock.releaseLock(); }
 }
 
 function run_(full) {

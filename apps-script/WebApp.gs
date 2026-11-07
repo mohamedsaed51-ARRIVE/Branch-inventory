@@ -3,11 +3,26 @@
  * النشر: نشر > نشر كتطبيق ويب > تنفيذ باسمي > الوصول: أي شخص.
  * اختياري: خصائص السكريبت (Project Settings > Script properties) أضف DATA_TOKEN لطلب ?token=
  */
+const REFRESH_MIN_SECONDS = 60;
+
 function doGet(e) {
-  const need = PropertiesService.getScriptProperties().getProperty('DATA_TOKEN');
+  const props = PropertiesService.getScriptProperties();
+  const need = props.getProperty('DATA_TOKEN');
   if (need && (!e || !e.parameter || e.parameter.token !== need)) return json_({ error: 'unauthorized' });
+  // ?refresh=1 : يعيد التجميع قبل الإرجاع (زر «تحديث» في اللوحة). الحد الأدنى بين تحديثين REFRESH_MIN_SECONDS لمنع الضغط.
+  let refreshed = false, note = '';
+  if (e && e.parameter && e.parameter.refresh === '1') {
+    const last = Number(props.getProperty('LAST_REFRESH') || 0);
+    if (Date.now() - last < REFRESH_MIN_SECONDS * 1000) note = 'throttled';
+    else {
+      props.setProperty('LAST_REFRESH', String(Date.now()));
+      refreshed = buildAuditSummary();   // true = تم، false = تجميع آخر شغال
+      if (!refreshed) note = 'busy';
+    }
+  }
   const sh = SpreadsheetApp.getActive().getSheetByName(CFG.SUMMARY);
-  if (!sh || sh.getLastRow() < 2) return json_({ rows: [] });
+  const meta = { generated: new Date().toISOString(), built: props.getProperty('LAST_BUILD') || '', refreshed: refreshed, note: note };
+  if (!sh || sh.getLastRow() < 2) return json_(Object.assign({ rows: [], monthly: [] }, meta));
   const tz = SpreadsheetApp.getActive().getSpreadsheetTimeZone();
   const rows = sh.getRange(2, 1, sh.getLastRow() - 1, 10).getValues().map(r => ({
     date: Utilities.formatDate(new Date(r[0]), tz, 'yyyy-MM-dd'),
@@ -19,7 +34,7 @@ function doGet(e) {
     month: String(r[0]).trim(), branch: r[1], total: r[2], upd: r[3], not_upd: r[4], no_audit: r[5],
     no_branch_reply: r[6], conflict: r[7], last: Utilities.formatDate(new Date(r[8]), tz, 'yyyy-MM-dd'), days: r[9]
   })) : [];
-  return json_({ rows: rows, monthly: monthly, generated: new Date().toISOString() });
+  return json_(Object.assign({ rows: rows, monthly: monthly }, meta));
 }
 
 function json_(o) {
