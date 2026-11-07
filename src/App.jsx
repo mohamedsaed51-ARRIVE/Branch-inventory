@@ -247,7 +247,7 @@ export default function App() {
         {!snapRows.length ? <div className="panel"><p>لا توجد بيانات تطابق الفلاتر الحالية.</p></div> : (<>
         <Heading tag="الشهر" title={`المؤشرات الشهرية — \u200E${curMonth || '—'}\u200E`} sub={curMonth ? `كل شحنة تُحسب مرة واحدة في الشهر بآخر نتيجة أوديت مسجلة لها. أيام الجرد: ${monthDays} من ${workDays} يوم عمل (الجمعة إجازة)${missWork.length ? '، ناقص: ' + missWork.join('، ') : ''}. آخر جرد: ${monthLast}.` : 'لا توجد بيانات شهرية'} />
         {!monthRows.length ? (
-          <div className="panel"><p><i className="fa-solid fa-triangle-exclamation warn" /> الكروت الشهرية تحتاج ورقة <b>تجميع_شهري</b> من السكريبت المحدّث (apps-script/ArriveAuditSummary.gs و WebApp.gs) ثم «إعادة بناء كاملة». لم أعرض أرقامًا شهرية تقديرية.</p></div>
+          <div className="panel"><p><i className="fa-solid fa-triangle-exclamation warn" /> الكروت الشهرية تحتاج ورقة <b>تجميع_شهري</b> من السكريبت المحدّث (apps-script/Code.gs) ثم «إعادة بناء كاملة» أو «تحديث التجميع». لم أعرض أرقامًا شهرية تقديرية.</p></div>
         ) : (<>
         <div className="kpi-row">
           <div className="kpi"><span className="l">شحنات الشهر (فريدة)</span><span className="v">{fi(M.total)}</span><span className="d muted">100% — كل شحنة مرة واحدة</span></div>
