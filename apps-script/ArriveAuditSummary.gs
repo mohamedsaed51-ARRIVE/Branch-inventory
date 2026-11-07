@@ -144,6 +144,17 @@ function buildMonthly_(sheetsData) {
 }
 
 /* ---------- التشغيل ---------- */
+// إعادة المحاولة عند مهلة خدمة Spreadsheets (الشيت الكبير): 4 محاولات بانتظار متزايد
+function retry_(fn) {
+  for (let i = 1; ; i++) {
+    try { return fn(); }
+    catch (e) {
+      if (i >= 4 || !/timed out|Service Spreadsheets|try again|Internal error|Too many|Rate Limit/i.test(String(e))) throw e;
+      Utilities.sleep(2000 * i);
+    }
+  }
+}
+
 function buildAuditSummary(full) {
   full = (full === true);  // المشغّلات تمرر كائنًا، فلا يُعتبر إعادة بناء كاملة
   const lock = LockService.getScriptLock();
@@ -160,7 +171,7 @@ function run_(full) {
   const prev = {};
   const old = ss.getSheetByName(CFG.SUMMARY);
   if (!full && old && old.getLastRow() > 1) {
-    old.getRange(2, 1, old.getLastRow() - 1, 10).getValues().forEach(r => {
+    retry_(() => old.getRange(2, 1, old.getLastRow() - 1, 10).getValues()).forEach(r => {
       const k = String(r[9]).trim();
       (prev[k] = prev[k] || []).push(r);
     });
@@ -170,7 +181,7 @@ function run_(full) {
   const monPrev = {};
   const oldMon = ss.getSheetByName(CFG.MONTHLY);
   if (!full && oldMon && oldMon.getLastRow() > 1) {
-    oldMon.getRange(2, 1, oldMon.getLastRow() - 1, 10).getValues().forEach(r => {
+    retry_(() => oldMon.getRange(2, 1, oldMon.getLastRow() - 1, 10).getValues()).forEach(r => {
       const k = String(r[0]).trim();
       (monPrev[k] = monPrev[k] || []).push(r);
     });
@@ -196,7 +207,7 @@ function run_(full) {
 
     const lastRow = sh.getLastRow(), lastCol = sh.getLastColumn();
     if (lastRow < 2) { log.push([name, 'فارغة', hidden.replace(' | ', '')]); return; }
-    const vals = sh.getRange(1, 1, lastRow, Math.min(lastCol, 40)).getValues();
+    const vals = retry_(() => sh.getRange(1, 1, lastRow, Math.min(lastCol, 40)).getValues());
     const res = summarizeSheet_(vals);
     if (res.error) { log.push([name, 'خطأ', hidden + res.error]); return; }
     monthData.push({ dt: dt, ships: res.ships });
@@ -219,14 +230,7 @@ function run_(full) {
 
   const head = ['التاريخ', 'الفرع', 'الشحنات', 'تم التحديث', 'لم يتم التحديث', 'غير محدد',
     'نسبة التحديث %', 'تحصيل غير محدّث', 'بدون رد', 'الورقة المصدر'];
-  const sum = ss.getSheetByName(CFG.SUMMARY) || ss.insertSheet(CFG.SUMMARY);
-  sum.clear();
-  sum.getRange(1, 1, 1, head.length).setValues([head]).setFontWeight('bold');
-  if (out.length) {
-    sum.getRange(2, 1, out.length, head.length).setValues(out);
-    sum.getRange(2, 1, out.length, 1).setNumberFormat('yyyy-mm-dd');
-  }
-  sum.setFrozenRows(1);
+  writeTable_(ss, CFG.SUMMARY, head, out, { dates: [1] });
 
   // الشهري: الأشهر الساخنة تُبنى من الأوراق، والباقي يُعاد من التجميع السابق
   const monRows = buildMonthly_(monthData).filter(r => hot(r[0]));
@@ -234,19 +238,23 @@ function run_(full) {
   monRows.sort((a, b) => String(a[0]).localeCompare(String(b[0])) || String(a[1]).localeCompare(String(b[1]), 'ar'));
   const mhead = ['الشهر', 'الفرع', 'الشحنات (فريدة)', 'تم التحديث (أوديت)', 'لم يتم التحديث (أوديت)', 'بدون رد الأوديت',
     'بدون رد الفرع', 'تعارض (رد الفرع تم والأوديت لم يتم)', 'آخر جرد', 'أيام الجرد'];
-  const msh = ss.getSheetByName(CFG.MONTHLY) || ss.insertSheet(CFG.MONTHLY);
-  msh.clear();
-  msh.getRange(1, 1, 1, mhead.length).setValues([mhead]).setFontWeight('bold');
-  if (monRows.length) {
-    msh.getRange(2, 1, monRows.length, 1).setNumberFormat('@');
-    msh.getRange(2, 1, monRows.length, mhead.length).setValues(monRows);
-    msh.getRange(2, 9, monRows.length, 1).setNumberFormat('yyyy-mm-dd');
-  }
-  msh.setFrozenRows(1);
+  writeTable_(ss, CFG.MONTHLY, mhead, monRows, { text: [1], dates: [9] });
 
-  const lg = ss.getSheetByName(CFG.LOG) || ss.insertSheet(CFG.LOG);
-  lg.clear();
-  lg.getRange(1, 1, 1, 4).setValues([['الورقة', 'الحالة', 'ملاحظات',
-    'آخر تشغيل ' + Utilities.formatDate(today, ss.getSpreadsheetTimeZone(), 'yyyy-MM-dd HH:mm') + (full ? ' (كامل)' : ' (سريع)')]]).setFontWeight('bold');
-  if (log.length) lg.getRange(2, 1, log.length, 3).setValues(log);
+  writeTable_(ss, CFG.LOG, ['الورقة', 'الحالة', 'ملاحظات',
+    'آخر تشغيل ' + Utilities.formatDate(today, ss.getSpreadsheetTimeZone(), 'yyyy-MM-dd HH:mm') + (full ? ' (كامل)' : ' (سريع)')], log, {});
+}
+
+// كتابة جدول: كل استدعاء للشيت يعيد المحاولة وحده، فعطل مؤقت لا يرجّع الكتابة من الأول
+function writeTable_(ss, name, head, rows, fmt) {
+  fmt = fmt || {};
+  const sh = retry_(() => ss.getSheetByName(name) || ss.insertSheet(name));
+  retry_(() => sh.clearContents());
+  retry_(() => sh.getRange(1, 1, 1, head.length).setValues([head]).setFontWeight('bold'));
+  if (rows.length) {
+    const w = rows[0].length;
+    (fmt.text || []).forEach(c => retry_(() => sh.getRange(2, c, rows.length, 1).setNumberFormat('@')));
+    retry_(() => sh.getRange(2, 1, rows.length, w).setValues(rows));
+    (fmt.dates || []).forEach(c => retry_(() => sh.getRange(2, c, rows.length, 1).setNumberFormat('yyyy-mm-dd')));
+  }
+  retry_(() => sh.setFrozenRows(1));
 }
