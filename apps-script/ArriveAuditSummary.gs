@@ -8,6 +8,7 @@ const CFG = {
   SUMMARY: 'تجميع_الجرد',
   LOG: 'سجل_التجميع',
   MONTHLY: 'تجميع_شهري',   // شحنات فريدة لكل شهر وفرع (آخر نتيجة أوديت مسجلة لكل شحنة)
+  TRACK: 'تتبع_الشحنات',   // لكل يوم وفرع: جديدة / متكررة / مفقودة (أرقام مجمعة بدون أرقام بوالص)
   RECENT_DAYS: 7,      // الأوراق الأحدث من كده تُعاد قراءتها في كل تحديث، والأقدم تُؤخذ من التجميع السابق
   EVERY_HOURS: 1       // التحديث التلقائي كل كام ساعة
 };
@@ -109,6 +110,44 @@ function summarizeSheet_(vals) {
   return { by: by, dup: dup, idx: idx, ships: ships };
 }
 
+// تتبع الشحنات بين أوراق الأيام المتتالية (أرقام مجمعة فقط).
+// جديدة = لم تكن في الورقة السابقة. متكررة = كانت في الورقة السابقة أيضًا ("مرحّلة").
+// متكررة 3 أيام+ = ظهرت في 3 أوراق متتالية أو أكثر. مرحّلة وغير محدّثة = مرحّلة ونتيجة أوديتها «لم يتم».
+// مفقودة = كانت في الورقة السابقة وغابت عن اليوم ونتيجتها هناك ليست «تم التحديث» (تُحسب على فرعها السابق).
+// تعريفات مقترحة وتحتاج اعتماد. الورقة الأولى المقروءة بلا ورقة سابقة فلا يُحسب لها تتبع.
+// الصف: [التاريخ، الفرع، الشحنات، جديدة، متكررة، متكررة 3 أيام+، مرحّلة وغير محدّثة، مفقودة، الورقة المصدر]
+function trackDays_(sheetsData) {
+  sheetsData.sort((a, b) => a.dt - b.dt);
+  const rows = [];
+  let prev = null, streak = {};
+  sheetsData.forEach(cur => {
+    const curMap = {}, by = {}, ns = {};
+    cur.ships.forEach(s => { curMap[s.a] = s; });
+    const get = b => by[b] || (by[b] = { total: 0, nw: 0, car: 0, r3: 0, carNot: 0, miss: 0 });
+    cur.ships.forEach(s => {
+      const o = get(s.b);
+      o.total++;
+      const p = prev && prev.map[s.a];
+      if (p) {
+        o.car++;
+        const n = (streak[s.a] || 1) + 1;
+        ns[s.a] = n;
+        if (n >= 3) o.r3++;
+        if (s.k === 'not') o.carNot++;
+      } else { o.nw++; ns[s.a] = 1; }
+    });
+    if (prev) {
+      Object.keys(prev.map).forEach(a => { if (!curMap[a] && prev.map[a].k !== 'upd') get(prev.map[a].b).miss++; });
+      Object.keys(by).sort((x, y) => String(x).localeCompare(String(y), 'ar')).forEach(b => {
+        const o = by[b];
+        rows.push([cur.dt, b, o.total, o.nw, o.car, o.r3, o.carNot, o.miss, cur.key]);
+      });
+    }
+    prev = { map: curMap }; streak = ns;
+  });
+  return rows;
+}
+
 function monthKey_(d) {
   return d.getFullYear() + '-' + (d.getMonth() < 9 ? '0' : '') + (d.getMonth() + 1);
 }
@@ -192,7 +231,7 @@ function run_(full) {
 
   ss.getSheets().forEach(sh => {
     const name = sh.getName();
-    if (name === CFG.SUMMARY || name === CFG.LOG || name === CFG.MONTHLY) return;
+    if (name === CFG.SUMMARY || name === CFG.LOG || name === CFG.MONTHLY || name === CFG.TRACK) return;
     const dt = sheetDate_(name, today);
     if (!dt) { log.push([name, 'تجاهل', 'ليست ورقة يوم']); return; }
     const key = name.trim();
@@ -210,7 +249,7 @@ function run_(full) {
     const vals = retry_(() => sh.getRange(1, 1, lastRow, Math.min(lastCol, 40)).getValues());
     const res = summarizeSheet_(vals);
     if (res.error) { log.push([name, 'خطأ', hidden + res.error]); return; }
-    monthData.push({ dt: dt, ships: res.ships });
+    monthData.push({ dt: dt, ships: res.ships, key: key });
     const notes = [];
     if (res.dup) notes.push('شحنات مكررة تم تجاهلها: ' + res.dup);
     let tot = 0, oth = 0;
@@ -239,6 +278,21 @@ function run_(full) {
   const mhead = ['الشهر', 'الفرع', 'الشحنات (فريدة)', 'تم التحديث (أوديت)', 'لم يتم التحديث (أوديت)', 'بدون رد الأوديت',
     'بدون رد الفرع', 'تعارض (رد الفرع تم والأوديت لم يتم)', 'آخر جرد', 'أيام الجرد'];
   writeTable_(ss, CFG.MONTHLY, mhead, monRows, { text: [1], dates: [9] });
+
+  // التتبع: الأيام المقروءة تُحسب من الأوراق، والباقي يُعاد من التتبع السابق (إن كانت ورقته ما زالت موجودة)
+  const trkRows = trackDays_(monthData);
+  const trkDone = {}, live = {};
+  trkRows.forEach(r => { trkDone[r[8]] = 1; });
+  out.forEach(r => { live[String(r[9]).trim()] = 1; });
+  const oldTrk = ss.getSheetByName(CFG.TRACK);
+  if (!full && oldTrk && oldTrk.getLastRow() > 1) {
+    retry_(() => oldTrk.getRange(2, 1, oldTrk.getLastRow() - 1, 9).getValues()).forEach(r => {
+      const k = String(r[8]).trim();
+      if (!trkDone[k] && live[k]) trkRows.push(r);
+    });
+  }
+  trkRows.sort((a, b) => a[0] - b[0] || String(a[1]).localeCompare(String(b[1]), 'ar'));
+  writeTable_(ss, CFG.TRACK, ['التاريخ', 'الفرع', 'الشحنات', 'جديدة', 'متكررة (مرحّلة)', 'متكررة 3 أيام+', 'مرحّلة وغير محدّثة', 'مفقودة', 'الورقة المصدر'], trkRows, { dates: [1] });
 
   writeTable_(ss, CFG.LOG, ['الورقة', 'الحالة', 'ملاحظات',
     'آخر تشغيل ' + Utilities.formatDate(today, ss.getSpreadsheetTimeZone(), 'yyyy-MM-dd HH:mm') + (full ? ' (كامل)' : ' (سريع)')], log, {});

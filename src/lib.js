@@ -84,6 +84,25 @@ export function sumMonthly(rows) {
   return { ...t, rate: pc(t.upd), p_not: pc(t.not_upd), p_no_audit: pc(t.no_audit), p_no_branch: pc(t.no_branch_reply), p_conflict: pc(t.conflict) };
 }
 
+// تتبع الشحنات التجريبي (غير حقيقي) مشتق من البيانات التجريبية اليومية
+export function demoTrack(rows) {
+  const dates = [...new Set(rows.map((r) => r.date))].sort();
+  const out = [];
+  dates.slice(1).forEach((d, di) => {
+    rows.filter((r) => r.date === d).forEach((r, bi) => {
+      const t = N(r.total), fresh = Math.round(t * (0.3 + ((di + bi) % 4) * 0.05)), carried = t - fresh;
+      const notShare = 1 - N(r.rate) / 100;
+      out.push({ date: d, branch: r.branch, total: t, fresh, carried, rep3: Math.round(carried * notShare * 0.6), carried_not: Math.round(carried * notShare), missing: Math.round(t * notShare * 0.06) });
+    });
+  });
+  return out;
+}
+export function sumTrack(rows) {
+  const t = { total: 0, fresh: 0, carried: 0, rep3: 0, carried_not: 0, missing: 0 };
+  rows.forEach((r) => Object.keys(t).forEach((k) => { t[k] += N(r[k]); }));
+  return t;
+}
+
 // الجمعة إجازة: لا تُحسب يومًا ناقصًا (0 = الأحد ... 5 = الجمعة)
 export const OFF_DAY = 5;
 export const isOff = (d) => new Date(d + 'T00:00:00Z').getUTCDay() === OFF_DAY;

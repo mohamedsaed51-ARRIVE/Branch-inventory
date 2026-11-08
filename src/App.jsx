@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import ChartBox from './ChartBox.jsx';
-import { N, fi, fp, sgn, sum, sumMonthly, isOff, addDays, missingWorkDays, LEVELS, levelOf, toCsv, download, loadCfg, saveCfg, demoRows, demoMonthly } from './lib.js';
+import { N, fi, fp, sgn, sum, sumMonthly, demoTrack, sumTrack, isOff, addDays, missingWorkDays, LEVELS, levelOf, toCsv, download, loadCfg, saveCfg, demoRows, demoMonthly } from './lib.js';
 
 const ENV_URL = import.meta.env.VITE_DATA_URL;
 const ENV_TOKEN = import.meta.env.VITE_DATA_TOKEN;
@@ -8,12 +8,12 @@ const DEFAULTS = { url: '', refreshMin: 15, excellent: 90, good: 80, bad: 50 };
 const PAGE = 15;
 
 function useData(url, refreshMin, demo) {
-  const [s, set] = useState({ status: 'idle', rows: [], monthly: [], at: null, building: false });
+  const [s, set] = useState({ status: 'idle', rows: [], monthly: [], track: [], at: null, building: false });
   // rebuild === true: يطلب من Apps Script إعادة التجميع أولًا (زر «تحديث»). التحديث التلقائي بالوقت قراءة فقط.
   const run = useCallback((rebuild) => {
     const build = rebuild === true;
-    if (demo) { const d = demoRows(); set({ status: 'ok', rows: d, monthly: demoMonthly(d), at: new Date(), generated: 'demo', building: false }); return; }
-    if (!url) { set({ status: 'nourl', rows: [], monthly: [], at: null, building: false }); return; }
+    if (demo) { const d = demoRows(); set({ status: 'ok', rows: d, monthly: demoMonthly(d), track: demoTrack(d), at: new Date(), generated: 'demo', building: false }); return; }
+    if (!url) { set({ status: 'nourl', rows: [], monthly: [], track: [], at: null, building: false }); return; }
     const q = [];
     if (ENV_TOKEN) q.push('token=' + encodeURIComponent(ENV_TOKEN));
     if (build) q.push('refresh=1');
@@ -21,7 +21,7 @@ function useData(url, refreshMin, demo) {
     set((p) => ({ ...p, status: p.rows.length ? 'refreshing' : 'loading', building: build, note: '' }));
     fetch(u).then((r) => r.json()).then((j) => {
       if (j.error) throw new Error(j.error);
-      set({ status: 'ok', rows: j.rows || [], monthly: j.monthly || [], at: new Date(), generated: j.generated, built: j.built, note: j.note, refreshed: j.refreshed, building: false });
+      set({ status: 'ok', rows: j.rows || [], monthly: j.monthly || [], track: j.track || [], at: new Date(), generated: j.generated, built: j.built, note: j.note, refreshed: j.refreshed, building: false });
     }).catch((e) => set((p) => ({ ...p, status: 'error', msg: String(e.message || e), building: false })));
   }, [url, demo]);
   useEffect(() => { run(false); }, [run]);
@@ -50,7 +50,7 @@ export default function App() {
   const [demoOn, setDemoOn] = useState(() => new URLSearchParams(location.search).get('demo') === '1');
   const [showSet, setShowSet] = useState(false);
   const url = cfg.url || ENV_URL || '';
-  const { status, rows, monthly, at, msg, generated, built, note, building, reload } = useData(url, cfg.refreshMin, demoOn);
+  const { status, rows, monthly, track, at, msg, generated, built, note, building, reload } = useData(url, cfg.refreshMin, demoOn);
 
   useEffect(() => { document.documentElement.setAttribute('data-theme', theme); saveCfg('bi_theme', theme); }, [theme]);
 
@@ -80,6 +80,11 @@ export default function App() {
   const prevRows = prevDate ? rows.filter((r) => r.date === prevDate && branchOk(r)) : null;
   const T = sum(snapRows), P = prevRows ? sum(prevRows) : null;
   const prevBy = new Map((prevRows || []).map((r) => [r.branch, r]));
+  const trkRows = track.filter((r) => r.date === snap && branchOk(r));
+  const trkBy = new Map(trkRows.map((r) => [r.branch, r]));
+  const TR = sumTrack(trkRows);
+  const TRP = prevDate && track.some((r) => r.date === prevDate) ? sumTrack(track.filter((r) => r.date === prevDate && branchOk(r))) : null;
+  const hasTrack = trkRows.length > 0;
 
   const months = [...new Set(monthly.map((r) => r.month))].sort();
   const curMonth = months.includes(month) ? month : months[months.length - 1];
@@ -130,7 +135,7 @@ export default function App() {
   /* ---------- حسابات ---------- */
   const board = snapRows.map((r) => {
     const p = prevBy.get(r.branch);
-    return { ...r, lv: levelOf(+r.rate, th), d: p ? +r.rate - +p.rate : null };
+    return { ...r, lv: levelOf(+r.rate, th), d: p ? +r.rate - +p.rate : null, tr: trkBy.get(r.branch) };
   }).sort((a, b) => a.rate - b.rate);
 
   const alerts = [];
@@ -138,6 +143,9 @@ export default function App() {
     if (r.lv === 'critical') alerts.push({ c: 's-violation', i: 'fa-circle-exclamation', t: `${r.branch}: نسبة التحديث ${fp(r.rate)} أقل من ${th.bad}%` });
     if (r.d != null && r.d <= -10) alerts.push({ c: 's-action', i: 'fa-arrow-trend-down', t: `${r.branch}: تراجع ${Math.abs(r.d).toFixed(1)} نقطة عن اليوم السابق` });
     if (N(r.no_reply) > 0) alerts.push({ c: 's-violation', i: 'fa-comment-slash', t: `${r.branch}: ${fi(r.no_reply)} شحنة بدون رد من الفرع` });
+  });
+  board.forEach((r) => {
+    if (r.tr && N(r.tr.missing) > 0) alerts.push({ c: 's-action', i: 'fa-box-open', t: `${r.branch}: ${fi(r.tr.missing)} شحنة كانت في جرد ${prevDate} وغابت عن ${snap} بدون «تم التحديث»` });
   });
   const recent = dates.slice(Math.max(0, dates.indexOf(snap) - 14), dates.indexOf(snap));
   const missing = [...new Set(rows.filter((r) => recent.includes(r.date)).map((r) => r.branch))].filter((b) => (!sel.length || sel.includes(b)) && !snapRows.some((r) => r.branch === b));
@@ -172,6 +180,8 @@ export default function App() {
   if (totNot) insights.push(`أكثر 3 فروع في غير المحدّث تمثل ${top3Share.toFixed(0)}% من الشحنات غير المحدّثة.`);
   if (maxCod && N(maxCod.cod_not)) insights.push(`أكبر تحصيل غير محدّث عند ${maxCod.branch}: ${fi(maxCod.cod_not)} ج.م.`);
   if (riser && riser.d > 0) insights.push(`أكبر تحسن: ${riser.branch} (${sgn(riser.d)} نقطة).`);
+  if (hasTrack && TR.missing) insights.push(`${fi(TR.missing)} شحنة اختفت من جرد ${snap} بعد ظهورها في ${prevDate} دون «تم التحديث».`);
+  if (hasTrack && TR.rep3) insights.push(`${fi(TR.rep3)} شحنة ظاهرة في جرد 3 أيام متتالية أو أكثر.`);
   if (dropper && dropper.d < 0) insights.push(`أكبر تراجع: ${dropper.branch} (${sgn(dropper.d)} نقطة).`);
 
   /* مخططات */
@@ -184,6 +194,13 @@ export default function App() {
   const lineCols = [cv('--chart-2'), cv('--status-action'), cv('--status-violation')];
   const trendSets = [{ label: 'الإجمالي', data: overall, borderColor: cv('--chart-1'), backgroundColor: cv('--chart-1'), tension: .25, borderWidth: 3, pointRadius: 3 }].concat(
     weak.map((b, i) => ({ label: b, data: trendDates.map((d) => { const r = inRange.find((x) => x.date === d && x.branch === b); return r ? +(+r.rate).toFixed(1) : null; }), borderColor: lineCols[i], backgroundColor: lineCols[i], tension: .25, borderWidth: 2, pointRadius: 2, spanGaps: true })));
+
+  /* اتجاه الشهر يوم بيوم */
+  const mDates = [...new Set(rows.filter((r) => r.date.startsWith(curMonth || '~') && branchOk(r)).map((r) => r.date))].sort();
+  const mRate = mDates.map((d) => +sum(rows.filter((r) => r.date === d && branchOk(r))).rate.toFixed(1));
+  const mTrack = mDates.map((d) => sumTrack(track.filter((r) => r.date === d && branchOk(r))));
+  const hasMTrack = mTrack.some((t) => t.total > 0);
+  const monthsTable = months.map((m, i) => { const x = sumMonthly(monthly.filter((r) => r.month === m && branchOk(r))); const pv = i ? sumMonthly(monthly.filter((r) => r.month === months[i - 1] && branchOk(r))) : null; return { m, x, dRate: pv ? x.rate - pv.rate : null }; }).reverse();
 
   /* جدول السجل */
   const histCols = [['date', 'التاريخ'], ['branch', 'الفرع'], ['total', 'الشحنات'], ['rate', 'نسبة التحديث'], ['not_upd', 'غير محدّثة'], ['cod_not', 'تحصيل غير محدّث'], ['no_reply', 'بدون رد']];
@@ -245,7 +262,23 @@ export default function App() {
         </div>
 
         {!snapRows.length ? <div className="panel"><p>لا توجد بيانات تطابق الفلاتر الحالية.</p></div> : (<>
-        <Heading tag="الشهر" title={`المؤشرات الشهرية — \u200E${curMonth || '—'}\u200E`} sub={curMonth ? `كل شحنة تُحسب مرة واحدة في الشهر بآخر نتيجة أوديت مسجلة لها. أيام الجرد: ${monthDays} من ${workDays} يوم عمل (الجمعة إجازة)${missWork.length ? '، ناقص: ' + missWork.join('، ') : ''}. آخر جرد: ${monthLast}.` : 'لا توجد بيانات شهرية'} />
+        <Heading tag="اليوم" title={`كروت يوم \u200E${snap}\u200E`} sub={`أرقام ورقة الجرد ليوم ${snap} فقط${prevDate ? '، والمقارنة مع ' + prevDate : ''}. غيّر اليوم من «إلى تاريخ».`} />
+        <div className="kpi-row">
+          <div className="kpi"><span className="l">شحنات اليوم</span><span className="v">{fi(T.total)}</span><Delta cur={T.total} prev={P && P.total} /></div>
+          <div className={'kpi ' + (T.rate >= th.good ? 'accent-ok' : T.rate >= th.bad ? 'accent-warn' : 'accent-bad')}><span className="l">نسبة التحديث <span className="chip s-progress">حسب الأوديت</span></span><span className="v">{fp(T.rate)}</span><Delta cur={T.rate} prev={P && P.rate} pp /></div>
+          <div className="kpi accent-warn"><span className="l">غير محدّثة</span><span className="v">{fi(T.not_upd)}</span><Delta cur={T.not_upd} prev={P && P.not_upd} lowerBetter /></div>
+          <div className="kpi accent-bad"><span className="l">بدون رد الفرع</span><span className="v">{fi(T.no_reply)}</span><Delta cur={T.no_reply} prev={P && P.no_reply} lowerBetter /></div>
+          <div className="kpi accent-teal"><span className="l">تحصيل غير محدّث (ج.م)</span><span className="v">{fi(T.cod_not)}</span><Delta cur={T.cod_not} prev={P && P.cod_not} lowerBetter /></div>
+          {hasTrack && <>
+            <div className="kpi"><span className="l">شحنات جديدة <span className="chip s-progress">تتبع</span></span><span className="v">{fi(TR.fresh)}</span><span className="d muted">لم تكن في جرد {prevDate}</span></div>
+            <div className="kpi accent-warn"><span className="l">متكررة (مرحّلة) <span className="chip s-progress">تتبع</span></span><span className="v">{fi(TR.carried)}</span><span className="d muted">منها {fi(TR.rep3)} ظاهرة 3 أيام+، و{fi(TR.carried_not)} غير محدّثة</span></div>
+            <div className={'kpi ' + (TR.missing ? 'accent-bad' : 'accent-ok')}><span className="l">مفقودة <span className="chip s-progress">تتبع</span></span><span className="v">{fi(TR.missing)}</span><Delta cur={TR.missing} prev={TRP && TRP.missing} lowerBetter /></div>
+          </>}
+        </div>
+        {!hasTrack && <p className="section-sub" style={{ marginTop: 8 }}><i className="fa-solid fa-circle-info" /> {track.length ? `لا يوجد تتبع لهذا اليوم (أول ورقة مقروءة أو لا توجد ورقة سابقة).` : 'كروت الجديدة والمتكررة والمفقودة تحتاج ورقة تتبع_الشحنات من السكريبت المحدّث ثم «إعادة بناء كاملة».'}</p>}
+        {hasTrack && <p className="section-sub" style={{ marginTop: 8 }}><b>التتبع:</b> جديدة = لم تكن في الورقة السابقة. متكررة = كانت فيها أيضًا. مفقودة = كانت في الورقة السابقة وغابت اليوم ونتيجتها لم تكن «تم التحديث». أرقام مجمعة فقط، وتعريفات مقترحة تحتاج اعتماد.</p>}
+
+        <Heading tag="الشهر" title={`ماذا حدث في الشهر — \u200E${curMonth || '—'}\u200E`} sub={curMonth ? `كل شحنة تُحسب مرة واحدة في الشهر بآخر نتيجة أوديت مسجلة لها. أيام الجرد: ${monthDays} من ${workDays} يوم عمل (الجمعة إجازة)${missWork.length ? '، ناقص: ' + missWork.join('، ') : ''}. آخر جرد: ${monthLast}.` : 'لا توجد بيانات شهرية'} />
         {!monthRows.length ? (
           <div className="panel"><p><i className="fa-solid fa-triangle-exclamation warn" /> الكروت الشهرية تحتاج ورقة <b>تجميع_شهري</b> من السكريبت المحدّث (apps-script/ArriveAuditSummary.gs و WebApp.gs) ثم «إعادة بناء كاملة». لم أعرض أرقامًا شهرية تقديرية.</p></div>
         ) : (<>
@@ -273,14 +306,34 @@ export default function App() {
         </table></div>
         <p className="section-sub">«تعارض» = رد الفرع «تم التحديث» لكن الأوديت يقول «لم يتم التحديث».</p>
         </>)}
+        {mDates.length > 0 && (
+          <div className="panel-grid" style={{ marginTop: 12 }}>
+            <div className="panel"><h3>نسبة التحديث يوم بيوم</h3><p className="panel-sub">{curMonth} — إجمالي الفروع المعروضة</p>
+              <div className="chart-wrap"><ChartBox type="line" theme={theme} legend={false} pct labels={mDates} datasets={[{ label: 'نسبة التحديث', data: mRate, borderColor: cv('--chart-1'), backgroundColor: cv('--chart-1'), tension: .25, borderWidth: 3, pointRadius: 3 }]} /></div></div>
+            {hasMTrack && <div className="panel"><h3>حركة الشحنات يوم بيوم</h3><p className="panel-sub">جديدة / متكررة / مفقودة — {curMonth}</p>
+              <div className="chart-wrap"><ChartBox type="bar" theme={theme} labels={mDates} datasets={[
+                { label: 'جديدة', data: mTrack.map((t) => t.fresh), backgroundColor: cv('--chart-2') },
+                { label: 'متكررة', data: mTrack.map((t) => t.carried), backgroundColor: cv('--status-action') },
+                { label: 'مفقودة', data: mTrack.map((t) => t.missing), backgroundColor: cv('--status-violation') }]} /></div></div>}
+          </div>
+        )}
+        {monthsTable.length > 1 && (<>
+          <h3 style={{ marginTop: 14 }}>مقارنة الأشهر</h3>
+          <div className="panel tscroll"><table>
+            <thead><tr><th>الشهر</th><th>الشحنات (فريدة)</th><th>نسبة التحديث</th><th>التغيير (نقطة)</th><th>غير محدّثة</th><th>بدون رد الفرع</th><th>تعارض</th></tr></thead>
+            <tbody>{monthsTable.map(({ m, x, dRate }) => <tr key={m}><td className="n">{m}</td><td className="n">{fi(x.total)}</td><td className="n"><b>{fp(x.rate)}</b></td>
+              <td className={'n ' + (dRate == null ? 'muted' : dRate > 0 ? 'ok' : dRate < 0 ? 'bad' : 'muted')} dir="ltr" style={{ textAlign: 'right' }}>{dRate == null ? '—' : sgn(dRate)}</td>
+              <td className="n">{fi(x.not_upd)}</td><td className="n">{fi(x.no_branch_reply)}</td><td className="n">{fi(x.conflict)}</td></tr>)}</tbody>
+          </table></div>
+        </>)}
 
         <Heading tag="أداء" title="صحة الفروع" sub={`ممتاز ≥ ${th.excellent}% — جيد ≥ ${th.good}% — يحتاج انتباه ≥ ${th.bad}% — حرج أقل من ذلك (حدود للعرض وليست سياسة معتمدة)`} />
         <div className="panel tscroll"><table>
-          <thead><tr><th>الفرع</th><th>الشحنات</th><th>نسبة التحديث</th><th>التغيير (نقطة)</th><th>غير محدّثة</th><th>تحصيل غير محدّث</th><th>بدون رد</th><th>المستوى</th></tr></thead>
+          <thead><tr><th>الفرع</th><th>الشحنات</th><th>نسبة التحديث</th><th>التغيير (نقطة)</th><th>غير محدّثة</th><th>تحصيل غير محدّث</th><th>بدون رد</th>{hasTrack && <><th>متكررة 3 أيام+</th><th>مفقودة</th></>}<th>المستوى</th></tr></thead>
           <tbody>{board.map((r) => (
             <tr key={r.branch}><td>{r.branch}</td><td className="n">{fi(r.total)}</td><td className="n"><b>{fp(r.rate)}</b></td>
               <td className={'n ' + (r.d == null ? 'muted' : r.d > 0 ? 'ok' : r.d < 0 ? 'bad' : 'muted')} dir="ltr" style={{ textAlign: 'right' }}>{r.d == null ? '—' : sgn(r.d)}</td>
-              <td className="n">{fi(r.not_upd)}</td><td className="n">{fi(r.cod_not)}</td><td className="n">{fi(N(r.no_reply))}</td><td><Badge lv={r.lv} /></td></tr>))}</tbody>
+              <td className="n">{fi(r.not_upd)}</td><td className="n">{fi(r.cod_not)}</td><td className="n">{fi(N(r.no_reply))}</td>{hasTrack && <><td className="n">{r.tr ? fi(r.tr.rep3) : '—'}</td><td className="n">{r.tr ? fi(r.tr.missing) : '—'}</td></>}<td><Badge lv={r.lv} /></td></tr>))}</tbody>
         </table></div>
 
         <Heading tag="اتجاهات" title="الاتجاهات والتوزيعات" />
@@ -354,7 +407,7 @@ export default function App() {
         </>)}
 
         <div className="foot">
-          <b>التعريفات:</b> نسبة التحديث = الشحنات المحدّثة ÷ إجمالي شحنات الفرع. التحصيل غير المحدّث = مجموع مبلغ التحصيل الموجب للشحنات غير المحدّثة. «تم التحديث» = تعليق الأوديت يبدأ بـ«تم»، «لم يتم التحديث» = يحتوي «لم يتم». مستويات الصحة ومقترحات الإجراءات للعرض وتحتاج اعتماد الإدارة.
+          <b>التعريفات:</b> نسبة التحديث = الشحنات المحدّثة ÷ إجمالي شحنات الفرع. التحصيل غير المحدّث = مجموع مبلغ التحصيل الموجب للشحنات غير المحدّثة. «تم التحديث» = تعليق الأوديت يبدأ بـ«تم»، «لم يتم التحديث» = يحتوي «لم يتم». مستويات الصحة ومقترحات الإجراءات وتعريفات التتبع (جديدة / متكررة / مفقودة) للعرض وتحتاج اعتماد الإدارة.
         </div>
       </div>
     </>

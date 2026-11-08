@@ -22,7 +22,7 @@ function doGet(e) {
   }
   const sh = SpreadsheetApp.getActive().getSheetByName(CFG.SUMMARY);
   const meta = { generated: new Date().toISOString(), built: props.getProperty('LAST_BUILD') || '', refreshed: refreshed, note: note };
-  if (!sh || sh.getLastRow() < 2) return json_(Object.assign({ rows: [], monthly: [] }, meta));
+  if (!sh || sh.getLastRow() < 2) return json_(Object.assign({ rows: [], monthly: [], track: [] }, meta));
   const tz = SpreadsheetApp.getActive().getSpreadsheetTimeZone();
   const rows = sh.getRange(2, 1, sh.getLastRow() - 1, 10).getValues().map(r => ({
     date: Utilities.formatDate(new Date(r[0]), tz, 'yyyy-MM-dd'),
@@ -34,7 +34,12 @@ function doGet(e) {
     month: String(r[0]).trim(), branch: r[1], total: r[2], upd: r[3], not_upd: r[4], no_audit: r[5],
     no_branch_reply: r[6], conflict: r[7], last: Utilities.formatDate(new Date(r[8]), tz, 'yyyy-MM-dd'), days: r[9]
   })) : [];
-  return json_(Object.assign({ rows: rows, monthly: monthly }, meta));
+  const ts = SpreadsheetApp.getActive().getSheetByName(CFG.TRACK);
+  const track = (ts && ts.getLastRow() > 1) ? ts.getRange(2, 1, ts.getLastRow() - 1, 9).getValues().map(r => ({
+    date: Utilities.formatDate(new Date(r[0]), tz, 'yyyy-MM-dd'), branch: r[1], total: r[2], fresh: r[3],
+    carried: r[4], rep3: r[5], carried_not: r[6], missing: r[7]
+  })) : [];
+  return json_(Object.assign({ rows: rows, monthly: monthly, track: track }, meta));
 }
 
 function json_(o) {
