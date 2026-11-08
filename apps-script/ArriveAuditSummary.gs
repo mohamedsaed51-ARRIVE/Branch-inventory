@@ -318,10 +318,10 @@ function run_(full) {
 
   const head = ['التاريخ', 'الفرع', 'الشحنات', 'تم التحديث', 'لم يتم التحديث', 'غير محدد',
     'نسبة التحديث %', 'تحصيل غير محدّث', 'بدون رد', 'الورقة المصدر'];
-  writeTable_(ss, CFG.SUMMARY, head, out, { dates: [1] });
+  writeTable_(ss, CFG.SUMMARY, head, out, { dates: [1], text: [10] });  // عمود الورقة المصدر نص: وإلا يحوّله الشيت لتاريخ (1-10 -> 10 يناير) فلا يُستخدم التجميع السابق
 
   outD.sort((a, b) => a[0] - b[0] || String(a[1]).localeCompare(String(b[1]), 'ar') || String(a[2]).localeCompare(String(b[2]), 'ar'));
-  writeTable_(ss, CFG.DETAIL, DETAIL_HEAD, outD, { dates: [1] });
+  writeTable_(ss, CFG.DETAIL, DETAIL_HEAD, outD, { dates: [1], text: [23] });
 
   // الشهري: الأشهر الساخنة تُبنى من الأوراق، والباقي يُعاد من التجميع السابق
   const monRows = buildMonthly_(monthData).filter(r => hot(r[0]));
