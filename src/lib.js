@@ -94,3 +94,62 @@ export function missingWorkDays(a, b) {
   for (let d = addDays(a, 1); d < b; d = addDays(d, 1)) if (!isOff(d)) out.push(d);
   return out;
 }
+
+/* ---------- التفصيلي (تجميع_تفصيلي) ---------- */
+export const GROUPS = ['قيد التوصيل', 'مرتجعات إلى الرئيسي', 'مرتجعات إلى الفروع', 'مرتجعات أخرى', 'في الطريق للتاجر', 'تأجيل', 'مشاكل وتعذر التسليم', 'تواصل واتساب', 'محاولات التسليم', 'إعادة توزيع وتحويل', 'أخرى'];
+export const isReturnGroup = (g) => g.startsWith('مرتجعات');
+const DKEYS = ['total', 'upd', 'not_upd', 'other', 'a0', 'a2', 'a3', 'a5', 'nd', 'cod', 'cod_not', 'r_none', 'r_done', 'r_main', 'r_rep', 'r_close', 'r_other', 'conflict', 'neg_cod'];
+
+// مصفوفات الويب آب -> كائنات
+export function detailObjects(detail, cols) {
+  const c = cols && cols.length ? cols : ['date', 'branch', 'grp', ...DKEYS, 'source'];
+  return (detail || []).map((r) => { const o = {}; c.forEach((k, i) => { o[k] = r[i]; }); return o; });
+}
+
+// إجمالي صفوف تفصيلية. ageMin: حد «متأخرة» وقيمه 2 أو 3 أو 5 فقط لأن التجميع بشرائح العمر (0-1، 2، 3-4، 5+)
+export function sumD(rows, ageMin = 3) {
+  const t = {}; DKEYS.forEach((k) => { t[k] = 0; });
+  rows.forEach((r) => DKEYS.forEach((k) => { t[k] += N(r[k]); }));
+  t.late = lateOf(t, ageMin);
+  t.returns = rows.filter((r) => isReturnGroup(r.grp)).reduce((a, r) => a + N(r.total), 0);
+  t.returns_main = rows.filter((r) => r.grp === 'مرتجعات إلى الرئيسي').reduce((a, r) => a + N(r.total), 0);
+  const pc = (v) => (t.total ? (v / t.total) * 100 : 0);
+  t.rate = pc(t.upd); t.p_late = pc(t.late); t.p_ret = pc(t.returns); t.p_none = pc(t.r_none);
+  return t;
+}
+export const AGE_OPTS = [[2, 'يومان فأكثر'], [3, '3 أيام فأكثر'], [5, '5 أيام فأكثر']];
+export function lateOf(t, ageMin) { return (ageMin <= 2 ? N(t.a2) : 0) + (ageMin <= 3 ? N(t.a3) : 0) + N(t.a5); }
+
+// تجميع حسب مفتاح (فرع / مجموعة / تاريخ)
+export function groupBy(rows, keyFn) {
+  const m = new Map();
+  rows.forEach((r) => { const k = keyFn(r); if (!m.has(k)) m.set(k, []); m.get(k).push(r); });
+  return m;
+}
+
+// بيانات تفصيلية تجريبية مشتقة من اليومي التجريبي (غير حقيقية)
+export function demoDetail(rows) {
+  let s = 7771;
+  const rnd = () => { s |= 0; s = (s + 0x6d2b79f5) | 0; let t = Math.imul(s ^ (s >>> 15), 1 | s); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; };
+  const mix = [['قيد التوصيل', .44], ['مرتجعات إلى الرئيسي', .22], ['مرتجعات إلى الفروع', .04], ['في الطريق للتاجر', .04], ['تأجيل', .05], ['مشاكل وتعذر التسليم', .08], ['تواصل واتساب', .04], ['محاولات التسليم', .04], ['إعادة توزيع وتحويل', .03], ['أخرى', .02]];
+  const out = [];
+  rows.forEach((r) => {
+    let left = N(r.total), leftU = N(r.upd);
+    mix.forEach(([g, w], i) => {
+      const t = i === mix.length - 1 ? left : Math.min(left, Math.round(N(r.total) * w * (0.8 + rnd() * 0.4)));
+      left -= t;
+      const u = Math.min(t, Math.round(t * (N(r.rate) / 100)));
+      const nu = t - u;
+      const old = r.branch === 'الزقازيق' || r.branch === 'الهرم' ? 0.25 : 0.04;
+      const a5 = Math.round(nu * old * .2), a3 = Math.round(nu * old), a2 = Math.round(t * .03);
+      const none = r.branch === 'قليوب' ? t : Math.round(t * .01);
+      const done = Math.round(u * .45);
+      const main = isReturnGroup(g) ? Math.round(t * .8) : Math.round(t * .05);
+      const rest = Math.max(0, t - none - done - main);
+      const rep = Math.round(rest * .5), cl = Math.round(rest * .3);
+      out.push({ date: r.date, branch: r.branch, grp: g, total: t, upd: u, not_upd: nu, other: 0, a0: Math.max(0, t - a2 - a3 - a5), a2, a3, a5, nd: 0,
+        cod: t * 330, cod_not: nu * 380, r_none: none, r_done: done, r_main: main, r_rep: rep, r_close: cl, r_other: Math.max(0, rest - rep - cl), conflict: Math.round(nu * .02), neg_cod: 0, source: 'demo' });
+    });
+  });
+  return out;
+}

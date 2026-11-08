@@ -1,5 +1,5 @@
 /**
- * يعرض ورقة "تجميع_الجرد" كـ JSON للوحة (تجميع فقط، بدون بيانات شحنات أو عملاء).
+ * يعرض أوراق "تجميع_الجرد" و"تجميع_شهري" و"تجميع_تفصيلي" كـ JSON للوحة (تجميع فقط، بدون بيانات شحنات أو عملاء).
  * النشر: نشر > نشر كتطبيق ويب > تنفيذ باسمي > الوصول: أي شخص.
  * اختياري: خصائص السكريبت (Project Settings > Script properties) أضف DATA_TOKEN لطلب ?token=
  */
@@ -22,7 +22,7 @@ function doGet(e) {
   }
   const sh = SpreadsheetApp.getActive().getSheetByName(CFG.SUMMARY);
   const meta = { generated: new Date().toISOString(), built: props.getProperty('LAST_BUILD') || '', refreshed: refreshed, note: note };
-  if (!sh || sh.getLastRow() < 2) return json_(Object.assign({ rows: [], monthly: [] }, meta));
+  if (!sh || sh.getLastRow() < 2) return json_(Object.assign({ rows: [], monthly: [], detail: [], detail_cols: DETAIL_COLS }, meta));
   const tz = SpreadsheetApp.getActive().getSpreadsheetTimeZone();
   const rows = sh.getRange(2, 1, sh.getLastRow() - 1, 10).getValues().map(r => ({
     date: Utilities.formatDate(new Date(r[0]), tz, 'yyyy-MM-dd'),
@@ -34,7 +34,13 @@ function doGet(e) {
     month: String(r[0]).trim(), branch: r[1], total: r[2], upd: r[3], not_upd: r[4], no_audit: r[5],
     no_branch_reply: r[6], conflict: r[7], last: Utilities.formatDate(new Date(r[8]), tz, 'yyyy-MM-dd'), days: r[9]
   })) : [];
-  return json_(Object.assign({ rows: rows, monthly: monthly }, meta));
+  // التفصيلي كمصفوفات (أخف حجمًا): الأعمدة في detail_cols. التاريخ ثم الفرع ثم المجموعة ثم الأرقام.
+  const ds = SpreadsheetApp.getActive().getSheetByName(CFG.DETAIL);
+  const detail = (ds && ds.getLastRow() > 1) ? ds.getRange(2, 1, ds.getLastRow() - 1, DETAIL_COLS.length).getValues().map(r => {
+    r[0] = Utilities.formatDate(new Date(r[0]), tz, 'yyyy-MM-dd');
+    return r;
+  }) : [];
+  return json_(Object.assign({ rows: rows, monthly: monthly, detail: detail, detail_cols: DETAIL_COLS }, meta));
 }
 
 function json_(o) {

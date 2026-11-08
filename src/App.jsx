@@ -1,19 +1,20 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import ChartBox from './ChartBox.jsx';
-import { N, fi, fp, sgn, sum, sumMonthly, isOff, addDays, missingWorkDays, LEVELS, levelOf, toCsv, download, loadCfg, saveCfg, demoRows, demoMonthly } from './lib.js';
+import Reports, { ReportNav } from './Reports.jsx';
+import { N, fi, fp, sgn, sum, sumMonthly, sumD, detailObjects, AGE_OPTS, isOff, addDays, missingWorkDays, LEVELS, levelOf, toCsv, download, loadCfg, saveCfg, demoRows, demoMonthly, demoDetail } from './lib.js';
 
 const ENV_URL = import.meta.env.VITE_DATA_URL;
 const ENV_TOKEN = import.meta.env.VITE_DATA_TOKEN;
-const DEFAULTS = { url: '', refreshMin: 15, excellent: 90, good: 80, bad: 50 };
+const DEFAULTS = { url: '', refreshMin: 15, excellent: 90, good: 80, bad: 50, ageMin: 3 };
 const PAGE = 15;
 
 function useData(url, refreshMin, demo) {
-  const [s, set] = useState({ status: 'idle', rows: [], monthly: [], at: null, building: false });
+  const [s, set] = useState({ status: 'idle', rows: [], monthly: [], detail: [], at: null, building: false });
   // rebuild === true: يطلب من Apps Script إعادة التجميع أولًا (زر «تحديث»). التحديث التلقائي بالوقت قراءة فقط.
   const run = useCallback((rebuild) => {
     const build = rebuild === true;
-    if (demo) { const d = demoRows(); set({ status: 'ok', rows: d, monthly: demoMonthly(d), at: new Date(), generated: 'demo', building: false }); return; }
-    if (!url) { set({ status: 'nourl', rows: [], monthly: [], at: null, building: false }); return; }
+    if (demo) { const d = demoRows(); set({ status: 'ok', rows: d, monthly: demoMonthly(d), detail: demoDetail(d), at: new Date(), generated: 'demo', building: false }); return; }
+    if (!url) { set({ status: 'nourl', rows: [], monthly: [], detail: [], at: null, building: false }); return; }
     const q = [];
     if (ENV_TOKEN) q.push('token=' + encodeURIComponent(ENV_TOKEN));
     if (build) q.push('refresh=1');
@@ -21,7 +22,7 @@ function useData(url, refreshMin, demo) {
     set((p) => ({ ...p, status: p.rows.length ? 'refreshing' : 'loading', building: build, note: '' }));
     fetch(u).then((r) => r.json()).then((j) => {
       if (j.error) throw new Error(j.error);
-      set({ status: 'ok', rows: j.rows || [], monthly: j.monthly || [], at: new Date(), generated: j.generated, built: j.built, note: j.note, refreshed: j.refreshed, building: false });
+      set({ status: 'ok', rows: j.rows || [], monthly: j.monthly || [], detail: detailObjects(j.detail, j.detail_cols), at: new Date(), generated: j.generated, built: j.built, note: j.note, refreshed: j.refreshed, building: false });
     }).catch((e) => set((p) => ({ ...p, status: 'error', msg: String(e.message || e), building: false })));
   }, [url, demo]);
   useEffect(() => { run(false); }, [run]);
@@ -50,7 +51,7 @@ export default function App() {
   const [demoOn, setDemoOn] = useState(() => new URLSearchParams(location.search).get('demo') === '1');
   const [showSet, setShowSet] = useState(false);
   const url = cfg.url || ENV_URL || '';
-  const { status, rows, monthly, at, msg, generated, built, note, building, reload } = useData(url, cfg.refreshMin, demoOn);
+  const { status, rows, monthly, detail, at, msg, generated, built, note, building, reload } = useData(url, cfg.refreshMin, demoOn);
 
   useEffect(() => { document.documentElement.setAttribute('data-theme', theme); saveCfg('bi_theme', theme); }, [theme]);
 
@@ -65,7 +66,11 @@ export default function App() {
   const [cmp, setCmp] = useState({ on: false, a: '', b: '' });
   const [month, setMonth] = useState('');
   const [copied, setCopied] = useState('');
+  const [view, setView] = useState(() => (new URLSearchParams(location.search).get('view') === 'reports' ? 'reports' : 'dash'));
+  const [rep, setRep] = useState(() => new URLSearchParams(location.search).get('rep') || 'exec');
   const th = { excellent: +cfg.excellent, good: +cfg.good, bad: +cfg.bad };
+  const ageMin = [2, 3, 5].includes(+cfg.ageMin) ? +cfg.ageMin : 3;
+  const setAgeMin = (v) => { const c = { ...cfg, ageMin: v }; setCfg(c); saveCfg('bi_cfg', c); };
 
   useEffect(() => { setFrom(''); setTo(''); }, [rows.length]);
   const dFrom = from || dates[Math.max(0, dates.length - 14)] || '';
@@ -80,6 +85,11 @@ export default function App() {
   const prevRows = prevDate ? rows.filter((r) => r.date === prevDate && branchOk(r)) : null;
   const T = sum(snapRows), P = prevRows ? sum(prevRows) : null;
   const prevBy = new Map((prevRows || []).map((r) => [r.branch, r]));
+  // التفصيلي ليوم الجرد المعروض واليوم السابق (يلزم تجميع_تفصيلي)
+  const hasDetail = detail.length > 0;
+  const dSnap = hasDetail ? detail.filter((r) => r.date === snap && branchOk(r)) : [];
+  const dPrev = hasDetail && prevDate ? detail.filter((r) => r.date === prevDate && branchOk(r)) : null;
+  const DT = sumD(dSnap, ageMin), DP = dPrev ? sumD(dPrev, ageMin) : null;
 
   const months = [...new Set(monthly.map((r) => r.month))].sort();
   const curMonth = months.includes(month) ? month : months[months.length - 1];
@@ -244,7 +254,33 @@ export default function App() {
           </div>
         </div>
 
-        {!snapRows.length ? <div className="panel"><p>لا توجد بيانات تطابق الفلاتر الحالية.</p></div> : (<>
+        <div className="tabs noprint" role="tablist">
+          <button role="tab" aria-selected={view === 'dash'} className={'tab' + (view === 'dash' ? ' on' : '')} onClick={() => setView('dash')}><i className="fa-solid fa-gauge-high" />اللوحة</button>
+          <button role="tab" aria-selected={view === 'reports'} className={'tab' + (view === 'reports' ? ' on' : '')} onClick={() => setView('reports')}><i className="fa-solid fa-file-lines" />التقارير</button>
+        </div>
+
+        {view === 'reports' ? (<>
+          <ReportNav rep={rep} setRep={setRep} />
+          <Reports rep={rep} detail={detail} monthly={monthly} dates={dates} dFrom={dFrom} dTo={dTo} branchOk={branchOk} sel={sel} th={th} ageMin={ageMin} setAgeMin={setAgeMin} theme={theme} cv={cv} snap={snap} prevDate={prevDate} allBranches={allBranches} />
+        </>) : !snapRows.length ? <div className="panel"><p>لا توجد بيانات تطابق الفلاتر الحالية.</p></div> : (<>
+        <Heading tag="اليوم" title={`الصورة التشغيلية — \u200E${snap}\u200E`} sub="ما في الجرد فعلًا في يوم الجرد المعروض: حجمه ونتيجته وعمره والمرتجعات وردود الفروع." />
+        {!hasDetail ? (
+          <div className="panel"><p><i className="fa-solid fa-triangle-exclamation warn" /> هذه الكروت (عمر الحالة، المرتجعات، ردود الفروع) تحتاج ورقة <b>تجميع_تفصيلي</b> من السكريبت المحدّث (apps-script/ArriveAuditSummary.gs و WebApp.gs) ثم «إعادة بناء كاملة». لم أعرض أرقامًا تقديرية.</p></div>
+        ) : (<>
+        <div className="kpi-row">
+          <div className="kpi"><span className="l">شحنات الجرد</span><span className="v">{fi(DT.total)}</span><Delta cur={DT.total} prev={DP && DP.total} /></div>
+          <div className={'kpi ' + (DT.rate >= th.good ? 'accent-ok' : DT.rate >= th.bad ? 'accent-warn' : 'accent-bad')}><span className="l">نسبة التحديث <span className="chip s-progress">حسب الأوديت</span></span><span className="v">{fp(DT.rate)}</span><Delta cur={DT.rate} prev={DP && DP.rate} pp /></div>
+          <div className="kpi accent-warn"><span className="l">متأخرة التحديث <span className="chip s-action">عمر الحالة</span></span><span className="v">{fi(DT.late)}</span><span className="d muted">{fp(DT.p_late)} من الشحنات — آخر حالة منذ {AGE_OPTS.find((o) => o[0] === ageMin)[1]}</span><Delta cur={DT.late} prev={DP && DP.late} lowerBetter /></div>
+          <div className="kpi accent-teal"><span className="l">مرتجعات عند الفروع</span><span className="v">{fi(DT.returns)}</span><span className="d muted">{fp(DT.p_ret)} من الشحنات — منها {fi(DT.returns_main)} إلى الرئيسي</span><Delta cur={DT.returns} prev={DP && DP.returns} lowerBetter /></div>
+          <div className="kpi accent-bad"><span className="l">بدون رد الفرع <span className="chip s-action">حسب الفرع</span></span><span className="v">{fi(DT.r_none)}</span><span className="d muted">{fp(DT.p_none)} من الشحنات</span><Delta cur={DT.r_none} prev={DP && DP.r_none} lowerBetter /></div>
+          <div className="kpi accent-bad"><span className="l">تعارض / بدون نتيجة أوديت</span><span className="v">{fi(DT.conflict)} <small className="muted">/ {fi(DT.other)}</small></span><span className="d muted">تعارض = رد الفرع «تم التحديث» والأوديت «لم يتم»</span></div>
+        </div>
+        <div className="note-row noprint"><label htmlFor="ageSel">حد «متأخرة» (عمر الحالة):</label>
+          <select id="ageSel" value={ageMin} onChange={(e) => setAgeMin(+e.target.value)}>{AGE_OPTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
+          <span className="muted">عمر الحالة = تاريخ ورقة الجرد − تاريخ آخر حالة. الحد غير معتمد من SOP، فاضبطه حسب السياسة.</span>
+          <button className="qa-btn" onClick={() => { setView('reports'); setRep('exec'); }}><i className="fa-solid fa-file-lines" />افتح التقارير</button></div>
+        </>)}
+
         <Heading tag="الشهر" title={`المؤشرات الشهرية — \u200E${curMonth || '—'}\u200E`} sub={curMonth ? `كل شحنة تُحسب مرة واحدة في الشهر بآخر نتيجة أوديت مسجلة لها. أيام الجرد: ${monthDays} من ${workDays} يوم عمل (الجمعة إجازة)${missWork.length ? '، ناقص: ' + missWork.join('، ') : ''}. آخر جرد: ${monthLast}.` : 'لا توجد بيانات شهرية'} />
         {!monthRows.length ? (
           <div className="panel"><p><i className="fa-solid fa-triangle-exclamation warn" /> الكروت الشهرية تحتاج ورقة <b>تجميع_شهري</b> من السكريبت المحدّث (apps-script/ArriveAuditSummary.gs و WebApp.gs) ثم «إعادة بناء كاملة». لم أعرض أرقامًا شهرية تقديرية.</p></div>

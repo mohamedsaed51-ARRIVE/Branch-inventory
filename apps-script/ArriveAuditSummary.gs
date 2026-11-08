@@ -8,9 +8,18 @@ const CFG = {
   SUMMARY: 'تجميع_الجرد',
   LOG: 'سجل_التجميع',
   MONTHLY: 'تجميع_شهري',   // شحنات فريدة لكل شهر وفرع (آخر نتيجة أوديت مسجلة لكل شحنة)
+  DETAIL: 'تجميع_تفصيلي',  // صف لكل (يوم + فرع + مجموعة حالة شحنة): عمر الحالة وردود الفروع والتحصيل
   RECENT_DAYS: 7,      // الأوراق الأحدث من كده تُعاد قراءتها في كل تحديث، والأقدم تُؤخذ من التجميع السابق
   EVERY_HOURS: 1       // التحديث التلقائي كل كام ساعة
 };
+
+// أعمدة التفصيلي: المفاتيح تُستخدم في الويب آب واللوحة بنفس الترتيب
+const DETAIL_COLS = ['date', 'branch', 'grp', 'total', 'upd', 'not_upd', 'other', 'a0', 'a2', 'a3', 'a5', 'nd',
+  'cod', 'cod_not', 'r_none', 'r_done', 'r_main', 'r_rep', 'r_close', 'r_other', 'conflict', 'neg_cod', 'source'];
+const DETAIL_HEAD = ['التاريخ', 'الفرع', 'مجموعة الحالة', 'الشحنات', 'تم التحديث', 'لم يتم التحديث', 'غير محدد',
+  'عمر الحالة 0-1 يوم', 'عمر الحالة يومان', 'عمر الحالة 3-4 أيام', 'عمر الحالة 5 أيام فأكثر', 'بدون تاريخ آخر حالة',
+  'التحصيل (موجب)', 'تحصيل غير محدّث', 'رد الفرع: فارغ', 'رد الفرع: تم التحديث', 'رد الفرع: للرئيسي', 'رد الفرع: مندوب',
+  'رد الفرع: تقفيل/وكيل', 'رد الفرع: أخرى', 'تعارض', 'تحصيل سالب (عدد)', 'الورقة المصدر'];
 
 function onOpen() {
   SpreadsheetApp.getUi().createMenu('جرد الفروع')
@@ -63,6 +72,52 @@ function classify_(comment) {
   return 'other';
 }
 
+
+// مجموعة حالة الشحنة (من عمود «حالة الشحنة»). تجميع للعرض وليس تصنيفًا معتمدًا.
+const STATUS_GROUPS = ['قيد التوصيل', 'مرتجعات إلى الرئيسي', 'مرتجعات إلى الفروع', 'مرتجعات أخرى', 'في الطريق للتاجر',
+  'تأجيل', 'مشاكل وتعذر التسليم', 'تواصل واتساب', 'محاولات التسليم', 'إعادة توزيع وتحويل', 'أخرى'];
+function statusGroup_(st) {
+  const s = normAr_(st).toLowerCase();
+  if (!s) return 'أخرى';
+  if (s.indexOf('واتس') !== -1) return 'تواصل واتساب';
+  if (s.indexOf('محاوله') !== -1) return 'محاولات التسليم';
+  if (s.indexOf('مرتجعات') !== -1 && s.indexOf('رئيسي') !== -1) return 'مرتجعات إلى الرئيسي';
+  if (s.indexOf('مرتجعات') !== -1 && s.indexOf('فروع') !== -1) return 'مرتجعات إلى الفروع';
+  if (s.indexOf('مرتجع') !== -1) return 'مرتجعات أخرى';
+  if (s.indexOf('الطريق للتاجر') !== -1) return 'في الطريق للتاجر';
+  if (s.indexOf('قيد التوصيل') !== -1 || s.indexOf('in transit') !== -1) return 'قيد التوصيل';
+  if (s.indexOf('تاجيل') !== -1) return 'تأجيل';
+  if (s.indexOf('اعاده توزيع') !== -1 || s.indexOf('تحويلات') !== -1) return 'إعادة توزيع وتحويل';
+  if (s.indexOf('مشكله') !== -1 || s.indexOf('رفض') !== -1 || s.indexOf('تهرب') !== -1 || s.indexOf('حل المشكله') !== -1 || s.indexOf('لم يتم') !== -1) return 'مشاكل وتعذر التسليم';
+  return 'أخرى';
+}
+
+// تصنيف نص «رد الفرع» للعرض فقط: none فارغ | done «تم التحديث» | main للرئيسي | close تقفيل/وكيل | rep مندوب | other
+function replyGroup_(rep) {
+  const r = normAr_(rep);
+  if (!r) return 'none';
+  if (r === 'تم التحديث') return 'done';
+  if (r.indexOf('رئيسي') !== -1) return 'main';
+  if (r.indexOf('تقفيل') !== -1 || r.indexOf('وكيل') !== -1 || r.indexOf('قفل') !== -1) return 'close';
+  if (r.indexOf('مندوب') !== -1) return 'rep';
+  return 'other';
+}
+
+// قيمة خلية -> تاريخ (يوم فقط) أو null. تقبل Date أو نصًا يبدأ بـ yyyy-mm-dd
+function toDay_(v) {
+  if (v instanceof Date && !isNaN(v.getTime())) return new Date(v.getFullYear(), v.getMonth(), v.getDate());
+  const m = String(v == null ? '' : v).match(/(\d{4})-(\d{1,2})-(\d{1,2})/);
+  return m ? new Date(+m[1], +m[2] - 1, +m[3]) : null;
+}
+// عمر الحالة بالأيام = تاريخ ورقة الجرد − تاريخ آخر حالة (لا يتأثر بتاريخ تشغيل السكريبت). null إن لم يوجد تاريخ صالح.
+function ageDays_(sheetDt, lastVal) {
+  const d = toDay_(lastVal);
+  if (!d) return null;
+  return Math.max(0, Math.round((new Date(sheetDt.getFullYear(), sheetDt.getMonth(), sheetDt.getDate()) - d) / 864e5));
+}
+// شرائح العمر: a0 = 0–1 يوم، a2 = يومان، a3 = 3–4 أيام، a5 = 5 أيام فأكثر
+function ageBucket_(a) { return a == null ? 'nd' : a <= 1 ? 'a0' : a === 2 ? 'a2' : a <= 4 ? 'a3' : 'a5'; }
+
 function findCols_(hdr) {
   const h = hdr.map(normAr_);
   const find = fn => { for (let i = 0; i < h.length; i++) if (fn(h[i])) return i; return -1; };
@@ -73,7 +128,9 @@ function findCols_(hdr) {
     branch: branch,
     cod: find(x => x.indexOf('مبلغ') !== -1),
     reply: find(x => x.indexOf('رد') === 0),
-    comment: find(x => x.indexOf('تعليق') !== -1 || x.indexOf('تعيق') !== -1 || x.indexOf('الاوديت') !== -1)
+    comment: find(x => x.indexOf('تعليق') !== -1 || x.indexOf('تعيق') !== -1 || x.indexOf('الاوديت') !== -1),
+    status: find(x => x.indexOf('حاله') === 0 && x.indexOf('شحنه') !== -1),
+    last: find(x => x.indexOf('تاريخ') !== -1 && x.indexOf('اخر') !== -1 && x.indexOf('حاله') !== -1)
   };
 }
 
@@ -82,10 +139,10 @@ function branchName_(v) {
 }
 
 // يعالج مصفوفة قيم ورقة واحدة (الصف الأول عناوين). مفصولة للاختبار.
-function summarizeSheet_(vals) {
+function summarizeSheet_(vals, sheetDt) {
   const idx = findCols_(vals[0]);
   if (idx.branch < 0 || idx.comment < 0) return { error: 'لم أجد عمود الفرع أو التعليق', idx: idx };
-  const by = {}, seen = {}, ships = [];
+  const by = {}, seen = {}, ships = [], det = {};
   let dup = 0;
   for (let r = 1; r < vals.length; r++) {
     const row = vals[r];
@@ -105,8 +162,21 @@ function summarizeSheet_(vals) {
     if (idx.reply >= 0 && !rep) o.noReply++;
     // سجل الشحنة للتجميع الشهري: a=رقم، b=فرع، k=نتيجة الأوديت، nr=بدون رد فرع، cf=رد الفرع «تم التحديث» والأوديت «لم يتم»
     ships.push({ a: awb, b: br, k: k, nr: (idx.reply >= 0 && !rep) ? 1 : 0, cf: (k === 'not' && normAr_(rep) === 'تم التحديث') ? 1 : 0 });
+
+    // التفصيلي: (فرع + مجموعة حالة). الحقول بنفس ترتيب DETAIL_COLS بعد (التاريخ، الفرع، المجموعة)
+    const grp = idx.status >= 0 ? statusGroup_(row[idx.status]) : 'أخرى';
+    const dk = br + '|' + grp;
+    const d = det[dk] || (det[dk] = { br: br, grp: grp, total: 0, upd: 0, not: 0, other: 0, a0: 0, a2: 0, a3: 0, a5: 0, nd: 0,
+      cod: 0, codNot: 0, rNone: 0, rDone: 0, rMain: 0, rRep: 0, rClose: 0, rOther: 0, cf: 0, neg: 0 });
+    d.total++; d[k]++;
+    d[ageBucket_(idx.last >= 0 && sheetDt ? ageDays_(sheetDt, row[idx.last]) : null)]++;
+    const cv = idx.cod >= 0 ? Number(row[idx.cod]) : 0;
+    if (cv > 0) { d.cod += cv; if (k === 'not') d.codNot += cv; } else if (cv < 0) d.neg++;
+    const rg = idx.reply >= 0 ? replyGroup_(rep) : 'other';
+    d[{ none: 'rNone', done: 'rDone', main: 'rMain', rep: 'rRep', close: 'rClose', other: 'rOther' }[rg]]++;
+    if (k === 'not' && normAr_(rep) === 'تم التحديث') d.cf++;
   }
-  return { by: by, dup: dup, idx: idx, ships: ships };
+  return { by: by, dup: dup, idx: idx, ships: ships, det: det };
 }
 
 function monthKey_(d) {
@@ -165,7 +235,7 @@ function buildAuditSummary(full) {
 function run_(full) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const today = new Date();
-  const out = [], log = [];
+  const out = [], log = [], outD = [];
 
   // صفوف التجميع السابق مجمعة باسم الورقة المصدر
   const prev = {};
@@ -174,6 +244,16 @@ function run_(full) {
     retry_(() => old.getRange(2, 1, old.getLastRow() - 1, 10).getValues()).forEach(r => {
       const k = String(r[9]).trim();
       (prev[k] = prev[k] || []).push(r);
+    });
+  }
+
+  // التفصيلي السابق مجمعًا باسم الورقة المصدر (العمود 23)
+  const prevD = {};
+  const oldD = ss.getSheetByName(CFG.DETAIL);
+  if (!full && oldD && oldD.getLastRow() > 1) {
+    retry_(() => oldD.getRange(2, 1, oldD.getLastRow() - 1, DETAIL_COLS.length).getValues()).forEach(r => {
+      const k = String(r[DETAIL_COLS.length - 1]).trim();
+      (prevD[k] = prevD[k] || []).push(r);
     });
   }
 
@@ -192,15 +272,16 @@ function run_(full) {
 
   ss.getSheets().forEach(sh => {
     const name = sh.getName();
-    if (name === CFG.SUMMARY || name === CFG.LOG || name === CFG.MONTHLY) return;
+    if (name === CFG.SUMMARY || name === CFG.LOG || name === CFG.MONTHLY || name === CFG.DETAIL) return;
     const dt = sheetDate_(name, today);
     if (!dt) { log.push([name, 'تجاهل', 'ليست ورقة يوم']); return; }
     const key = name.trim();
     const hidden = sh.isSheetHidden() ? 'مخفية | ' : '';
     const ageDays = (today.getTime() - dt.getTime()) / 864e5;
 
-    if (!full && ageDays > CFG.RECENT_DAYS && prev[key] && !hot(monthKey_(dt))) {
+    if (!full && ageDays > CFG.RECENT_DAYS && prev[key] && prevD[key] && !hot(monthKey_(dt))) {
       prev[key].forEach(r => out.push(r));
+      prevD[key].forEach(r => outD.push(r));
       log.push([name, 'من التجميع السابق', hidden.replace(' | ', '')]);
       return;
     }
@@ -208,10 +289,17 @@ function run_(full) {
     const lastRow = sh.getLastRow(), lastCol = sh.getLastColumn();
     if (lastRow < 2) { log.push([name, 'فارغة', hidden.replace(' | ', '')]); return; }
     const vals = retry_(() => sh.getRange(1, 1, lastRow, Math.min(lastCol, 40)).getValues());
-    const res = summarizeSheet_(vals);
+    const res = summarizeSheet_(vals, dt);
     if (res.error) { log.push([name, 'خطأ', hidden + res.error]); return; }
     monthData.push({ dt: dt, ships: res.ships });
     const notes = [];
+    Object.keys(res.det).forEach(k => {
+      const d = res.det[k];
+      outD.push([dt, d.br, d.grp, d.total, d.upd, d.not, d.other, d.a0, d.a2, d.a3, d.a5, d.nd, d.cod, d.codNot,
+        d.rNone, d.rDone, d.rMain, d.rRep, d.rClose, d.rOther, d.cf, d.neg, key]);
+    });
+    if (res.idx.status < 0) notes.push('عمود حالة الشحنة غير موجود');
+    if (res.idx.last < 0) notes.push('عمود تاريخ آخر حالة غير موجود (عمر الحالة غير محسوب)');
     if (res.dup) notes.push('شحنات مكررة تم تجاهلها: ' + res.dup);
     let tot = 0, oth = 0;
     Object.keys(res.by).forEach(br => {
@@ -231,6 +319,9 @@ function run_(full) {
   const head = ['التاريخ', 'الفرع', 'الشحنات', 'تم التحديث', 'لم يتم التحديث', 'غير محدد',
     'نسبة التحديث %', 'تحصيل غير محدّث', 'بدون رد', 'الورقة المصدر'];
   writeTable_(ss, CFG.SUMMARY, head, out, { dates: [1] });
+
+  outD.sort((a, b) => a[0] - b[0] || String(a[1]).localeCompare(String(b[1]), 'ar') || String(a[2]).localeCompare(String(b[2]), 'ar'));
+  writeTable_(ss, CFG.DETAIL, DETAIL_HEAD, outD, { dates: [1] });
 
   // الشهري: الأشهر الساخنة تُبنى من الأوراق، والباقي يُعاد من التجميع السابق
   const monRows = buildMonthly_(monthData).filter(r => hot(r[0]));
