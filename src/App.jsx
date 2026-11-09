@@ -81,12 +81,24 @@ export default function App() {
   const T = sum(snapRows), P = prevRows ? sum(prevRows) : null;
   const prevBy = new Map((prevRows || []).map((r) => [r.branch, r]));
 
-  const months = [...new Set(monthly.map((r) => r.month))].sort();
+  // المؤشرات الشهرية = مجموع صفوف الجرد اليومية (الشحنة تُعد في كل يوم ظهرت فيه، بلا إزالة تكرار بين الأيام)
+  const monthlyAll = useMemo(() => {
+    const by = new Map();
+    rows.forEach((r) => {
+      const k = r.date.slice(0, 7) + '|' + r.branch;
+      const o = by.get(k) || { month: r.date.slice(0, 7), branch: r.branch, total: 0, upd: 0, not_upd: 0, no_audit: 0, no_branch_reply: 0, last: r.date };
+      o.total += N(r.total); o.upd += N(r.upd); o.not_upd += N(r.not_upd); o.no_audit += N(r.other); o.no_branch_reply += N(r.no_reply);
+      if (r.date > o.last) o.last = r.date;
+      by.set(k, o);
+    });
+    return [...by.values()];
+  }, [rows]);
+  const months = [...new Set(monthlyAll.map((r) => r.month))].sort();
   const curMonth = months.includes(month) ? month : months[months.length - 1];
-  const monthRows = monthly.filter((r) => r.month === curMonth && branchOk(r));
+  const monthRows = monthlyAll.filter((r) => r.month === curMonth && branchOk(r));
   const M = sumMonthly(monthRows);
   const prevMonth = months[months.indexOf(curMonth) - 1];
-  const MP = prevMonth ? sumMonthly(monthly.filter((r) => r.month === prevMonth && branchOk(r))) : null;
+  const MP = prevMonth ? sumMonthly(monthlyAll.filter((r) => r.month === prevMonth && branchOk(r))) : null;
   const monthLast = monthRows.map((r) => r.last).sort().pop();
   const monthDates = dates.filter((d) => d.startsWith(curMonth || '~') && !isOff(d));
   let workDays = 0; const missWork = [];
@@ -245,12 +257,12 @@ export default function App() {
         </div>
 
         {!snapRows.length ? <div className="panel"><p>لا توجد بيانات تطابق الفلاتر الحالية.</p></div> : (<>
-        <Heading tag="الشهر" title={`المؤشرات الشهرية — \u200E${curMonth || '—'}\u200E`} sub={curMonth ? `كل شحنة تُحسب مرة واحدة في الشهر بآخر نتيجة أوديت مسجلة لها. أيام الجرد: ${monthDays} من ${workDays} يوم عمل (الجمعة إجازة)${missWork.length ? '، ناقص: ' + missWork.join('، ') : ''}. آخر جرد: ${monthLast}.` : 'لا توجد بيانات شهرية'} />
+        <Heading tag="الشهر" title={`المؤشرات الشهرية — \u200E${curMonth || '—'}\u200E`} sub={curMonth ? `إجمالي الشحنات = مجموع صفوف الجرد في أيام الشهر (الشحنة تُعد في كل يوم ظهرت فيه). أيام الجرد: ${monthDays} من ${workDays} يوم عمل (الجمعة إجازة)${missWork.length ? '، ناقص: ' + missWork.join('، ') : ''}. آخر جرد: ${monthLast}.` : 'لا توجد بيانات شهرية'} />
         {!monthRows.length ? (
-          <div className="panel"><p><i className="fa-solid fa-triangle-exclamation warn" /> الكروت الشهرية تحتاج ورقة <b>تجميع_شهري</b> من السكريبت المحدّث (apps-script/ArriveAuditSummary.gs و WebApp.gs) ثم «إعادة بناء كاملة». لم أعرض أرقامًا شهرية تقديرية.</p></div>
+          <div className="panel"><p><i className="fa-solid fa-triangle-exclamation warn" /> لا توجد صفوف جرد يومية لهذا الشهر بعد.</p></div>
         ) : (<>
         <div className="kpi-row">
-          <div className="kpi"><span className="l">شحنات الشهر (فريدة)</span><span className="v">{fi(M.total)}</span><span className="d muted">100% — كل شحنة مرة واحدة</span></div>
+          <div className="kpi"><span className="l">إجمالي الشحنات</span><span className="v">{fi(M.total)}</span><span className="d muted">100% — مجموع صفوف الجرد في أيام الشهر</span></div>
           <div className={'kpi ' + (M.rate >= th.good ? 'accent-ok' : M.rate >= th.bad ? 'accent-warn' : 'accent-bad')}><span className="l">نسبة التحديث <span className="chip s-progress">حسب الأوديت</span></span><span className="v">{fp(M.rate)}</span>
             <span className="d muted">تم التحديث {fi(M.upd)} من {fi(M.total)}{MP ? ` — الشهر السابق ${fp(MP.rate)}` : ''}</span></div>
           <div className="kpi accent-warn"><span className="l">غير محدّثة <span className="chip s-progress">حسب الأوديت</span></span><span className="v">{fi(M.not_upd)}</span><span className="d muted">{fp(M.p_not)} من الشحنات</span></div>
@@ -258,20 +270,19 @@ export default function App() {
           <div className="kpi accent-teal"><span className="l">بدون رد الأوديت <span className="chip s-progress">حسب الأوديت</span></span><span className="v">{fi(M.no_audit)}</span><span className="d muted">{fp(M.p_no_audit)} من الشحنات (تعليق الأوديت فارغ أو غير مطابق)</span></div>
         </div>
         <p className="section-sub" style={{ marginTop: 8 }}>
-          <b>الأساس:</b> «حسب الأوديت» = عمود تعليق الأوديت («تم…» = محدّثة، «لم يتم…» = غير محدّثة، الفارغ = بدون رد الأوديت). «حسب الفرع» = عمود رد الفرع (الفارغ = بدون رد). النسب كلها من شحنات الشهر الفريدة. حالة «إغلاق رد الأوديت» لا يوجد لها عمود في الشيت بعد، والبديل المعروض هو «بدون رد الأوديت».
+          <b>الأساس:</b> «حسب الأوديت» = عمود تعليق الأوديت («تم…» = محدّثة، «لم يتم…» = غير محدّثة، الفارغ = بدون رد الأوديت). «حسب الفرع» = عمود رد الفرع (الفارغ = بدون رد). النسب كلها من إجمالي الشحنات (مجموع صفوف الجرد اليومية، بلا إزالة تكرار بين الأيام). حالة «إغلاق رد الأوديت» لا يوجد لها عمود في الشيت بعد، والبديل المعروض هو «بدون رد الأوديت».
         </p>
         <div className="panel tscroll" style={{ marginTop: 8 }}><table>
-          <thead><tr><th>الفرع</th><th>الشحنات</th><th>نسبة التحديث (أوديت)</th><th>غير محدّثة</th><th>بدون رد الفرع</th><th>بدون رد الأوديت</th><th>تعارض</th></tr></thead>
+          <thead><tr><th>الفرع</th><th>الشحنات</th><th>نسبة التحديث (أوديت)</th><th>غير محدّثة</th><th>بدون رد الفرع</th><th>بدون رد الأوديت</th></tr></thead>
           <tbody>{[...monthRows].sort((a, b) => (N(a.upd) / (N(a.total) || 1)) - (N(b.upd) / (N(b.total) || 1))).map((r) => {
             const t = N(r.total) || 1; const rate = N(r.upd) / t * 100;
             return <tr key={r.branch}><td>{r.branch}</td><td className="n">{fi(r.total)}</td><td className="n"><b>{fp(rate)}</b></td>
               <td className="n">{fi(r.not_upd)} <small className="muted">({fp(N(r.not_upd) / t * 100)})</small></td>
               <td className="n">{fi(r.no_branch_reply)} <small className="muted">({fp(N(r.no_branch_reply) / t * 100)})</small></td>
               <td className="n">{fi(r.no_audit)} <small className="muted">({fp(N(r.no_audit) / t * 100)})</small></td>
-              <td className="n">{fi(r.conflict)}</td></tr>;
+              </tr>;
           })}</tbody>
         </table></div>
-        <p className="section-sub">«تعارض» = رد الفرع «تم التحديث» لكن الأوديت يقول «لم يتم التحديث».</p>
         </>)}
 
         <Heading tag="أداء" title="صحة الفروع" sub={`ممتاز ≥ ${th.excellent}% — جيد ≥ ${th.good}% — يحتاج انتباه ≥ ${th.bad}% — حرج أقل من ذلك (حدود للعرض وليست سياسة معتمدة)`} />
