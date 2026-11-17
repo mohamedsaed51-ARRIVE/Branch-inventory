@@ -39,6 +39,12 @@ function Delta({ cur, prev, lowerBetter, pp }) {
   const c = d === 0 ? 'muted' : (lowerBetter ? d < 0 : d > 0) ? 'ok' : 'bad';
   return <span className={'d ' + c}><span dir="ltr">{pp ? sgn(d) + ' نقطة' : (d > 0 ? '+' : '') + fi(d)}</span> عن اليوم السابق</span>;
 }
+function MDelta({ cur, prev, lowerBetter, pp, neutral, label }) {
+  if (prev == null) return <span className="d muted">لا يوجد شهر سابق للمقارنة</span>;
+  const d = cur - prev;
+  const c = d === 0 || neutral ? 'muted' : (lowerBetter ? d < 0 : d > 0) ? 'ok' : 'bad';
+  return <span className={'d ' + c}><span dir="ltr">{pp ? sgn(d) + ' نقطة' : (d > 0 ? '+' : '') + fi(d)}</span> عن {label}</span>;
+}
 const Badge = ({ lv }) => <span className={'chip ' + LEVELS[lv].cls}><i className={'fa-solid ' + LEVELS[lv].icon} />{LEVELS[lv].label}</span>;
 const Heading = ({ tag, title, sub }) => (
   <div><div className="section-heading"><span className="tag">{tag}</span><h2>{title}</h2></div>{sub && <p className="section-sub">{sub}</p>}</div>
@@ -172,6 +178,7 @@ export default function App() {
     setTimeout(() => setCopied(''), 2500);
   };
 
+  const crit = board.filter((r) => r.lv === 'critical');
   const big = board.filter((r) => N(r.total) >= 50);
   const worst = big.slice(0, 3), best = [...big].reverse().slice(0, 3);
   const totNot = N(T.not_upd);
@@ -262,12 +269,12 @@ export default function App() {
           <div className="panel"><p><i className="fa-solid fa-triangle-exclamation warn" /> لا توجد صفوف جرد يومية لهذا الشهر بعد.</p></div>
         ) : (<>
         <div className="kpi-row">
-          <div className="kpi"><span className="l">إجمالي الشحنات</span><span className="v">{fi(M.total)}</span><span className="d muted">100% — مجموع صفوف الجرد في أيام الشهر</span></div>
+          <div className="kpi"><span className="l">إجمالي الشحنات</span><span className="v">{fi(M.total)}</span><span className="d muted">100% — مجموع صفوف الجرد في أيام الشهر</span><MDelta cur={M.total} prev={MP && MP.total} neutral label={'الشهر السابق ' + (prevMonth || '')} /></div>
           <div className={'kpi ' + (M.rate >= th.good ? 'accent-ok' : M.rate >= th.bad ? 'accent-warn' : 'accent-bad')}><span className="l">نسبة التحديث <span className="chip s-progress">حسب الأوديت</span></span><span className="v">{fp(M.rate)}</span>
-            <span className="d muted">تم التحديث {fi(M.upd)} من {fi(M.total)}{MP ? ` — الشهر السابق ${fp(MP.rate)}` : ''}</span></div>
-          <div className="kpi accent-warn"><span className="l">غير محدّثة <span className="chip s-progress">حسب الأوديت</span></span><span className="v">{fi(M.not_upd)}</span><span className="d muted">{fp(M.p_not)} من الشحنات</span></div>
-          <div className="kpi accent-bad"><span className="l">بدون رد الفرع <span className="chip s-action">حسب الفرع</span></span><span className="v">{fi(M.no_branch_reply)}</span><span className="d muted">{fp(M.p_no_branch)} من الشحنات (عمود رد الفرع فارغ)</span></div>
-          <div className="kpi accent-teal"><span className="l">بدون رد الأوديت <span className="chip s-progress">حسب الأوديت</span></span><span className="v">{fi(M.no_audit)}</span><span className="d muted">{fp(M.p_no_audit)} من الشحنات (تعليق الأوديت فارغ أو غير مطابق)</span></div>
+            <span className="d muted">تم التحديث {fi(M.upd)} من {fi(M.total)}{MP ? ` — الشهر السابق ${fp(MP.rate)}` : ''}</span><MDelta cur={M.rate} prev={MP && MP.rate} pp label="الشهر السابق" /></div>
+          <div className="kpi accent-warn"><span className="l">غير محدّثة <span className="chip s-progress">حسب الأوديت</span></span><span className="v">{fi(M.not_upd)}</span><span className="d muted">{fp(M.p_not)} من الشحنات</span><MDelta cur={M.p_not} prev={MP && MP.p_not} pp lowerBetter label="الشهر السابق (النسبة)" /></div>
+          <div className="kpi accent-bad"><span className="l">بدون رد الفرع <span className="chip s-action">حسب الفرع</span></span><span className="v">{fi(M.no_branch_reply)}</span><span className="d muted">{fp(M.p_no_branch)} من الشحنات (عمود رد الفرع فارغ)</span><MDelta cur={M.p_no_branch} prev={MP && MP.p_no_branch} pp lowerBetter label="الشهر السابق (النسبة)" /></div>
+          <div className="kpi accent-teal"><span className="l">بدون رد الأوديت <span className="chip s-progress">حسب الأوديت</span></span><span className="v">{fi(M.no_audit)}</span><span className="d muted">{fp(M.p_no_audit)} من الشحنات (تعليق الأوديت فارغ أو غير مطابق)</span><MDelta cur={M.p_no_audit} prev={MP && MP.p_no_audit} pp lowerBetter label="الشهر السابق (النسبة)" /></div>
         </div>
         <p className="section-sub" style={{ marginTop: 8 }}>
           <b>الأساس:</b> «حسب الأوديت» = عمود تعليق الأوديت («تم…» = محدّثة، «لم يتم…» = غير محدّثة، الفارغ = بدون رد الأوديت). «حسب الفرع» = عمود رد الفرع (الفارغ = بدون رد). النسب كلها من إجمالي الشحنات (مجموع صفوف الجرد اليومية، بلا إزالة تكرار بين الأيام). حالة «إغلاق رد الأوديت» لا يوجد لها عمود في الشيت بعد، والبديل المعروض هو «بدون رد الأوديت».
@@ -284,6 +291,13 @@ export default function App() {
           })}</tbody>
         </table></div>
         </>)}
+
+        <Heading tag="اليوم" title={`مؤشرات آخر يوم جرد — ‎${snap}‎`} sub={`أرقام يوم واحد (وليست تراكمية للشهر)، مع المقارنة باليوم السابق${prevDate ? ' ' + prevDate : ''}.`} />
+        <div className="kpi-row">
+          <div className={'kpi ' + (crit.length ? 'accent-bad' : 'accent-ok')}><span className="l">فروع في المستوى الحرج <span className="chip s-progress">حسب الأوديت</span></span><span className="v">{fi(crit.length)}</span><span className="d muted">من {fi(board.length)} فرع — نسبة التحديث أقل من {th.bad}%{crit.length ? ': ' + crit.map((r) => r.branch).join('، ') : ''}</span></div>
+          <div className="kpi accent-bad"><span className="l">تحصيل غير محدّث (ج.م) <span className="chip s-progress">حسب الأوديت</span></span><span className="v">{fi(T.cod_not)}</span><Delta cur={T.cod_not} prev={P && P.cod_not} lowerBetter /><span className="d muted">مجموع مبالغ التحصيل الموجبة للشحنات غير المحدّثة</span></div>
+          <div className="kpi accent-teal"><span className="l">شحنات بدون رد فرع <span className="chip s-action">حسب الفرع</span></span><span className="v">{fi(T.no_reply)}</span><Delta cur={T.no_reply} prev={P && P.no_reply} lowerBetter /><span className="d muted">عمود رد الفرع فارغ</span></div>
+        </div>
 
         <Heading tag="أداء" title="صحة الفروع" sub={`ممتاز ≥ ${th.excellent}% — جيد ≥ ${th.good}% — يحتاج انتباه ≥ ${th.bad}% — حرج أقل من ذلك (حدود للعرض وليست سياسة معتمدة)`} />
         <div className="panel tscroll"><table>
