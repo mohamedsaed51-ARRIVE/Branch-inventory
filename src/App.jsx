@@ -8,7 +8,7 @@ const DEFAULTS = { url: '', refreshMin: 15, excellent: 90, good: 80, bad: 50 };
 const PAGE = 15;
 
 function useData(url, refreshMin, demo) {
-  const [s, set] = useState({ status: 'idle', rows: [], monthly: [], at: null, building: false });
+  const [s, set] = useState({ status: 'idle', rows: [], monthly: [], follow: null, at: null, building: false });
   // rebuild === true: يطلب من Apps Script إعادة التجميع أولًا (زر «تحديث»). التحديث التلقائي بالوقت قراءة فقط.
   const run = useCallback((rebuild) => {
     const build = rebuild === true;
@@ -21,7 +21,7 @@ function useData(url, refreshMin, demo) {
     set((p) => ({ ...p, status: p.rows.length ? 'refreshing' : 'loading', building: build, note: '' }));
     fetch(u).then((r) => r.json()).then((j) => {
       if (j.error) throw new Error(j.error);
-      set({ status: 'ok', rows: j.rows || [], monthly: j.monthly || [], at: new Date(), generated: j.generated, built: j.built, note: j.note, refreshed: j.refreshed, building: false });
+      set({ status: 'ok', rows: j.rows || [], monthly: j.monthly || [], follow: j.follow || null, at: new Date(), generated: j.generated, built: j.built, note: j.note, refreshed: j.refreshed, building: false });
     }).catch((e) => set((p) => ({ ...p, status: 'error', msg: String(e.message || e), building: false })));
   }, [url, demo]);
   useEffect(() => { run(false); }, [run]);
@@ -56,7 +56,7 @@ export default function App() {
   const [demoOn, setDemoOn] = useState(() => new URLSearchParams(location.search).get('demo') === '1');
   const [showSet, setShowSet] = useState(false);
   const url = cfg.url || ENV_URL || '';
-  const { status, rows, monthly, at, msg, generated, built, note, building, reload } = useData(url, cfg.refreshMin, demoOn);
+  const { status, rows, monthly, follow, at, msg, generated, built, note, building, reload } = useData(url, cfg.refreshMin, demoOn);
 
   useEffect(() => { document.documentElement.setAttribute('data-theme', theme); saveCfg('bi_theme', theme); }, [theme]);
 
@@ -298,6 +298,19 @@ export default function App() {
           <div className="kpi accent-bad"><span className="l">تحصيل غير محدّث (ج.م) <span className="chip s-progress">حسب الأوديت</span></span><span className="v">{fi(T.cod_not)}</span><Delta cur={T.cod_not} prev={P && P.cod_not} lowerBetter /><span className="d muted">مجموع مبالغ التحصيل الموجبة للشحنات غير المحدّثة</span></div>
           <div className="kpi accent-teal"><span className="l">شحنات بدون رد فرع <span className="chip s-action">حسب الفرع</span></span><span className="v">{fi(T.no_reply)}</span><Delta cur={T.no_reply} prev={P && P.no_reply} lowerBetter /><span className="d muted">عمود رد الفرع فارغ</span></div>
         </div>
+
+        <Heading tag="متابعة" title="مؤشرات المتابعة" sub={follow ? `حتى ${follow.asOf}. أعداد على مستوى كل الفروع (لا تتأثر بفلاتر الفروع). «مفقودة» و«متكررة» حدودهما مقترحة وتحتاج اعتماد الإدارة.` : ''} />
+        {!follow || !follow.kpi ? (
+          <div className="panel"><p className="muted"><i className="fa-solid fa-circle-info" /> مؤشرات المتابعة غير متاحة: الويب آب لا يرسل ملخص المتابعة (تحقق من نسخة Apps Script ومن ورقة ملخص_المتابعة).</p></div>
+        ) : (<>
+          <div className="kpi-row">
+            <div className={'kpi ' + (follow.kpi.closed_reappeared > 0 ? 'accent-bad' : 'accent-ok')}><span className="l">مغلقة وظاهرة <span className="chip s-progress">حسب الأوديت</span></span><span className="v">{fi(follow.kpi.closed_reappeared)}</span><span className="d muted">شحنات أُغلقت (تم الغلق) ثم ظهرت في جرد يوم لاحق</span></div>
+            <div className={'kpi ' + (follow.kpi.missing > 0 ? 'accent-warn' : 'accent-ok')}><span className="l">شحنات مفقودة <span className="chip s-action">افتراض مقترح</span></span><span className="v">{fi(follow.kpi.missing)}</span><span className="d muted">{fp(follow.kpi.missing_rate)} من {fi(follow.kpi.total)} شحنة — اختفت من الجرد وليست في حالة نهائية</span></div>
+            <div className="kpi"><span className="l">حالات مفتوحة <span className="chip s-progress">حسب الأوديت</span></span><span className="v">{fi(follow.kpi.open)}</span><span className="d muted">أقدم حالة مفتوحة: {fi(follow.kpi.oldest_open_days)} يوم</span></div>
+            <div className="kpi accent-teal"><span className="l">معدل الإغلاق <span className="chip s-progress">حسب الأوديت</span></span><span className="v">{fp(follow.kpi.close_rate)}</span><span className="d muted">{fi(follow.kpi.closed)} من {fi(follow.kpi.total)} شحنة (حالة الأوديت = تم الغلق)</span></div>
+          </div>
+          {follow.kpi.closed === 0 && <div className="alert s-action"><i className="fa-solid fa-triangle-exclamation" /><span>لا توجد أي شحنة بحالة «تم الغلق». إن لم يكن هذا متوقعًا فتأكد من تعبئة عمود «حالة الأوديت» في الشيت، وإلا ستظهر «مغلقة وظاهرة» و«معدل الإغلاق» صفرًا بلا دلالة.</span></div>}
+        </>)}
 
         <Heading tag="أداء" title="صحة الفروع" sub={`ممتاز ≥ ${th.excellent}% — جيد ≥ ${th.good}% — يحتاج انتباه ≥ ${th.bad}% — حرج أقل من ذلك (حدود للعرض وليست سياسة معتمدة)`} />
         <div className="panel tscroll"><table>
