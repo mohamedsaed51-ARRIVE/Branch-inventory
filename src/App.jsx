@@ -285,6 +285,12 @@ export default function App() {
         </table></div>
         </>)}
 
+        <Heading tag="اليوم" title={`مؤشرات آخر يوم جرد — ‎${snap}‎`} sub={`أرقام يوم واحد (وليست تراكمية للشهر)، مع المقارنة باليوم السابق${prevDate ? ' ' + prevDate : ''}.`} />
+        <div className="kpi-row">
+          <div className="kpi accent-bad"><span className="l">تحصيل غير محدّث (ج.م) <span className="chip s-progress">حسب الأوديت</span></span><span className="v">{fi(T.cod_not)}</span><Delta cur={T.cod_not} prev={P && P.cod_not} lowerBetter /><span className="d muted">مجموع مبالغ التحصيل الموجبة للشحنات غير المحدّثة</span></div>
+          <div className="kpi accent-teal"><span className="l">شحنات بدون رد فرع <span className="chip s-action">حسب الفرع</span></span><span className="v">{fi(T.no_reply)}</span><Delta cur={T.no_reply} prev={P && P.no_reply} lowerBetter /><span className="d muted">عمود رد الفرع فارغ</span></div>
+        </div>
+
         <Heading tag="أداء" title="صحة الفروع" sub={`ممتاز ≥ ${th.excellent}% — جيد ≥ ${th.good}% — يحتاج انتباه ≥ ${th.bad}% — حرج أقل من ذلك (حدود للعرض وليست سياسة معتمدة)`} />
         <div className="panel tscroll"><table>
           <thead><tr><th>الفرع</th><th>الشحنات</th><th>نسبة التحديث</th><th>التغيير (نقطة)</th><th>غير محدّثة</th><th>تحصيل غير محدّث</th><th>بدون رد</th><th>المستوى</th></tr></thead>
